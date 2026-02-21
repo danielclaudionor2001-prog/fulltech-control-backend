@@ -1,0 +1,96 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  ADMIN
+  TECH
+}
+
+enum ServiceOrderType {
+  instalacao
+  manutencao
+  vistoria
+  suporte
+}
+
+enum ServiceOrderDeadline {
+  sem_prazo
+  D1_dia
+  D3_dias
+  D7_dias
+  D15_dias
+  D30_dias
+}
+
+enum ServiceOrderStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELED
+}
+
+model User {
+  id String @id @default(uuid())
+
+  // ID do usuário no Clerk (ex: user_2abc123...)
+  clerkUserId String @unique
+
+  // Perfil interno da aplicação (autorização)
+  role UserRole @default(TECH)
+
+  // Dados básicos espelhados do Clerk (opcionalmente sincronizados)
+  name     String?
+  imageUrl String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relações com OS
+  createdOrders  ServiceOrder[] @relation("createdBy")
+  assignedOrders ServiceOrder[] @relation("assignedTo")
+}
+
+model ServiceOrder {
+  id         String  @id @default(uuid())
+  identifier String? @unique
+
+  // Campos da tela OS (aba Geral / Localização)
+  osType          ServiceOrderType
+  deadline        ServiceOrderDeadline?
+  customer        String
+  description     String
+  durationMinutes Int
+
+  // Agendamento (date + time combinados)
+  scheduleAt       DateTime
+  scheduleTimeText String?
+
+  collaborator String?
+  address      String?
+
+  status ServiceOrderStatus @default(OPEN)
+
+  // Quem criou (normalmente ADMIN)
+  createdById String
+  createdBy   User   @relation("createdBy", fields: [createdById], references: [id])
+
+  // Técnico responsável (opcional)
+  assignedToId String?
+  assignedTo   User?   @relation("assignedTo", fields: [assignedToId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([createdById])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([scheduleAt])
+}
