@@ -17,8 +17,8 @@ import type * as Prisma from "./prismaNamespace.js"
 
 const config: runtime.GetPrismaClientConfig = {
   "previewFeatures": [],
-  "clientVersion": "7.4.1",
-  "engineVersion": "55ae170b1ced7fc6ed07a15f110549408c501bb3",
+  "clientVersion": "7.4.0",
+  "engineVersion": "ab56fe763f921d033a6c195e7ddeb3e255bdbb57",
   "activeProvider": "postgresql",
   "inlineSchema": "generator client {\n  provider = \"prisma-client\"\n  output   = \"../src/generated/prisma\"\n}\n\ndatasource db {\n  provider = \"postgresql\"\n}\n\nenum UserRole {\n  ADMIN\n  TECH\n}\n\nenum ServiceOrderType {\n  instalacao\n  manutencao\n  vistoria\n  suporte\n}\n\nenum ServiceOrderDeadline {\n  sem_prazo\n  D1_dia\n  D3_dias\n  D7_dias\n  D15_dias\n  D30_dias\n}\n\nenum ServiceOrderStatus {\n  OPEN\n  IN_PROGRESS\n  DONE\n  CANCELED\n}\n\nmodel User {\n  id String @id @default(uuid())\n\n  // ID do usuário no Clerk (ex: user_2abc123...)\n  clerkUserId String @unique\n\n  // Perfil interno da aplicação (autorização)\n  role UserRole @default(TECH)\n\n  // Dados básicos espelhados do Clerk (opcionalmente sincronizados)\n  name     String?\n  imageUrl String?\n\n  isActive Boolean @default(true)\n\n  createdAt DateTime @default(now())\n  updatedAt DateTime @updatedAt\n\n  // Relações com OS\n  createdOrders  ServiceOrder[] @relation(\"createdBy\")\n  assignedOrders ServiceOrder[] @relation(\"assignedTo\")\n}\n\nmodel ServiceOrder {\n  id         String  @id @default(uuid())\n  identifier String? @unique\n\n  // Campos da tela OS (aba Geral / Localização)\n  osType          ServiceOrderType\n  deadline        ServiceOrderDeadline?\n  customer        String\n  description     String\n  durationMinutes Int\n\n  // Agendamento (date + time combinados)\n  scheduleAt       DateTime\n  scheduleTimeText String?\n\n  collaborator String?\n  address      String?\n\n  status ServiceOrderStatus @default(OPEN)\n\n  // Quem criou (normalmente ADMIN)\n  createdById String\n  createdBy   User   @relation(\"createdBy\", fields: [createdById], references: [id])\n\n  // Técnico responsável (opcional)\n  assignedToId String?\n  assignedTo   User?   @relation(\"assignedTo\", fields: [assignedToId], references: [id])\n\n  createdAt DateTime @default(now())\n  updatedAt DateTime @updatedAt\n\n  @@index([createdById])\n  @@index([assignedToId])\n  @@index([status])\n  @@index([scheduleAt])\n}\n",
   "runtimeDataModel": {
@@ -174,7 +174,7 @@ export interface PrismaClient<
    * ])
    * ```
    * 
-   * Read more in our [docs](https://www.prisma.io/docs/orm/prisma-client/queries/transactions).
+   * Read more in our [docs](https://www.prisma.io/docs/concepts/components/prisma-client/transactions).
    */
   $transaction<P extends Prisma.PrismaPromise<any>[]>(arg: [...P], options?: { isolationLevel?: Prisma.TransactionIsolationLevel }): runtime.Types.Utils.JsPromise<runtime.Types.Utils.UnwrapTuple<P>>
 
