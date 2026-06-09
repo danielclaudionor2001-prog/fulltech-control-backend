@@ -3,7 +3,7 @@ import { ClerkAuthGuard } from './guards/auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 
 @Module({
-    providers: [ClerkAuthGuard, RolesGuard],
-    exports: [ClerkAuthGuard, RolesGuard],
+  providers: [ClerkAuthGuard, RolesGuard],
+  exports: [ClerkAuthGuard, RolesGuard],
 })
-export class AuthModule { }
+export class AuthModule {}

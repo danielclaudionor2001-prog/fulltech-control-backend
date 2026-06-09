@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -39,6 +40,7 @@ model User {
 
   // ID do usuário no Clerk (ex: user_2abc123...)
   clerkUserId String @unique
+  email       String? @unique
 
   // Perfil interno da aplicação (autorização)
   role UserRole @default(TECH)
@@ -55,6 +57,27 @@ model User {
   // Relações com OS
   createdOrders  ServiceOrder[] @relation("createdBy")
   assignedOrders ServiceOrder[] @relation("assignedTo")
+
+  @@index([role, isActive])
+}
+
+model AllowedEmail {
+  id    String @id @default(uuid())
+  email String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Customer {
+  id      String @id @default(uuid())
+  name    String
+  address String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
 }
 
 model ServiceOrder {

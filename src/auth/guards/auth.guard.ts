@@ -1,76 +1,196 @@
 import {
-    CanActivate,
-    ExecutionContext,
-    ForbiddenException,
-    Injectable,
-    UnauthorizedException,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+  UnauthorizedException,
 } from '@nestjs/common';
-import { verifyToken } from '@clerk/backend';
+import { ConfigService } from '@nestjs/config';
+import { createClerkClient, verifyToken } from '@clerk/backend';
+import { UserRole } from '../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
+
+type LocalUserPayload = {
+  email: string | null;
+  id: string;
+  imageUrl: string | null;
+  isActive: boolean;
+  name: string | null;
+  role: UserRole;
+};
+
+type AuthenticatedRequest = {
+  headers: {
+    authorization?: string;
+  };
+  user?: LocalUserPayload & {
+    clerkUserId: string;
+  };
+};
 
 @Injectable()
 export class ClerkAuthGuard implements CanActivate {
-    constructor(private prisma: PrismaService) { }
+  constructor(
+    private readonly config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {}
 
-    private getBearerToken(authHeader?: string): string {
-        if (!authHeader) throw new UnauthorizedException('Missing Authorization header');
+  private get clerkClient() {
+    return createClerkClient({
+      secretKey: this.config.getOrThrow<string>('CLERK_SECRET_KEY'),
+    });
+  }
 
-        const [type, token] = authHeader.split(' ');
-        if (type !== 'Bearer' || !token) {
-            throw new UnauthorizedException('Invalid Authorization header');
-        }
-
-        return token;
+  private getBearerToken(authHeader?: string): string {
+    if (!authHeader) {
+      throw new UnauthorizedException('Missing Authorization header');
     }
 
-    async canActivate(ctx: ExecutionContext): Promise<boolean> {
-        const req = ctx.switchToHttp().getRequest();
-        const token = this.getBearerToken(req.headers.authorization);
-
-        let payload: any;
-        try {
-            payload = await verifyToken(token, {
-                secretKey: process.env.CLERK_SECRET_KEY!,
-            });
-        } catch {
-            throw new UnauthorizedException('Invalid Clerk token');
-        }
-
-        const clerkUserId = payload?.sub as string | undefined;
-        if (!clerkUserId) throw new UnauthorizedException('Token without subject');
-
-        // Claims opcionais (podem ou não existir dependendo da config do Clerk)
-        const firstName = payload?.first_name as string | undefined;
-        const lastName = payload?.last_name as string | undefined;
-        const fullName = [firstName, lastName].filter(Boolean).join(' ') || undefined;
-        const imageUrl = (payload?.image_url as string | undefined) ?? undefined;
-
-        const localUser = await this.prisma.user.upsert({
-            where: { clerkUserId },
-            update: {
-                name: fullName ?? undefined,
-                imageUrl: imageUrl ?? undefined,
-            },
-            create: {
-                clerkUserId,
-                role: 'TECH', // padrão (você promove para ADMIN depois)
-                name: fullName ?? null,
-                imageUrl: imageUrl ?? null,
-            },
-            select: {
-                id: true,
-                clerkUserId: true,
-                role: true,
-                name: true,
-                isActive: true,
-            },
-        });
-
-        if (!localUser.isActive) {
-            throw new ForbiddenException('User is inactive');
-        }
-
-        req.user = localUser;
-        return true;
+    const [type, token] = authHeader.split(' ');
+    if (type !== 'Bearer' || !token) {
+      throw new UnauthorizedException('Invalid Authorization header');
     }
+
+    return token;
+  }
+
+  private getAdminEmails() {
+    return new Set(
+      (this.config.get<string>('CLERK_ADMIN_EMAILS') ?? '')
+        .split(',')
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean),
+    );
+  }
+
+  private getFirstAdminEmail() {
+    return (
+      this.config
+        .get<string>('CLERK_FIRST_ADMIN_EMAIL')
+        ?.trim()
+        .toLowerCase() ?? ''
+    );
+  }
+
+  private async resolveLocalUser(
+    clerkUserId: string,
+    email: string,
+    name: string | null,
+    imageUrl: string | null,
+  ): Promise<LocalUserPayload> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const configuredAdminEmails = this.getAdminEmails();
+    const firstAdminEmail = this.getFirstAdminEmail();
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { clerkUserId },
+      select: {
+        clerkUserId: true,
+        email: true,
+        id: true,
+        imageUrl: true,
+        isActive: true,
+        name: true,
+        role: true,
+      },
+    });
+
+    const allowedEmailEntry = await this.prisma.allowedEmail.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true },
+    });
+
+    const shouldBeAdmin =
+      normalizedEmail === firstAdminEmail ||
+      configuredAdminEmails.has(normalizedEmail) ||
+      existingUser?.role === UserRole.ADMIN;
+    const isAllowedTechnician = Boolean(allowedEmailEntry);
+    const role = shouldBeAdmin
+      ? UserRole.ADMIN
+      : (existingUser?.role ?? UserRole.TECH);
+    const isActive = shouldBeAdmin || isAllowedTechnician;
+
+    return this.prisma.user.upsert({
+      where: { clerkUserId },
+      update: {
+        email: normalizedEmail,
+        imageUrl,
+        isActive,
+        name,
+        role,
+      },
+      create: {
+        clerkUserId,
+        email: normalizedEmail,
+        imageUrl,
+        isActive,
+        name,
+        role,
+      },
+      select: {
+        email: true,
+        id: true,
+        imageUrl: true,
+        isActive: true,
+        name: true,
+        role: true,
+      },
+    });
+  }
+
+  async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    const req = ctx.switchToHttp().getRequest<AuthenticatedRequest>();
+    const token = this.getBearerToken(req.headers.authorization);
+    const clerkSecretKey = this.config.getOrThrow<string>('CLERK_SECRET_KEY');
+    const clerkJwtKey = this.config.get<string>('CLERK_JWT_KEY');
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = await verifyToken(token, {
+        jwtKey: clerkJwtKey,
+        secretKey: clerkSecretKey,
+      });
+    } catch {
+      throw new UnauthorizedException('Invalid Clerk token');
+    }
+
+    const clerkUserId = payload.sub;
+    if (typeof clerkUserId !== 'string' || !clerkUserId) {
+      throw new UnauthorizedException('Token without subject');
+    }
+
+    const clerkUser = await this.clerkClient.users.getUser(clerkUserId);
+    const primaryEmail =
+      clerkUser.emailAddresses.find(
+        (emailAddress) => emailAddress.id === clerkUser.primaryEmailAddressId,
+      ) ?? clerkUser.emailAddresses[0];
+
+    if (!primaryEmail?.emailAddress) {
+      throw new UnauthorizedException('Clerk user without primary email');
+    }
+
+    const fullName =
+      [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') ||
+      null;
+
+    const localUser = await this.resolveLocalUser(
+      clerkUserId,
+      primaryEmail.emailAddress,
+      fullName,
+      clerkUser.imageUrl ?? null,
+    );
+
+    if (!localUser.isActive) {
+      throw new ForbiddenException(
+        'This email is not authorized to access the application',
+      );
+    }
+
+    req.user = {
+      ...localUser,
+      clerkUserId,
+    };
+
+    return true;
+  }
 }
