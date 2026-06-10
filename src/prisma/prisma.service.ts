@@ -1,13 +1,10 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '../generated/prisma';
 import { PrismaNeon } from '@prisma/adapter-neon';
 
 @Injectable()
-export class PrismaService
-  extends PrismaClient
-  implements OnModuleInit, OnModuleDestroy
-{
+export class PrismaService extends PrismaClient implements OnModuleDestroy {
   constructor(config: ConfigService) {
     const url = config.get<string>('DATABASE_URL');
     if (!url) {
@@ -18,10 +15,6 @@ export class PrismaService
 
     const adapter = new PrismaNeon({ connectionString: url });
     super({ adapter });
-  }
-
-  async onModuleInit() {
-    await this.$connect();
   }
 
   async onModuleDestroy() {
