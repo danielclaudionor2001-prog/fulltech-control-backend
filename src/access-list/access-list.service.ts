@@ -1,8 +1,8 @@
 import {
-  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { UserRole } from '../generated/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
@@ -11,36 +11,33 @@ export class AccessListService {
 
   findAll() {
     return this.prisma.allowedEmail.findMany({
-      orderBy: { email: 'asc' },
+      orderBy: [{ role: 'asc' }, { email: 'asc' }],
     });
   }
 
-  async create(email: string) {
+  async create(email: string, role: UserRole) {
     const normalizedEmail = email.trim().toLowerCase();
 
-    const existing = await this.prisma.allowedEmail.findUnique({
+    const saved = await this.prisma.allowedEmail.upsert({
       where: { email: normalizedEmail },
-    });
-
-    if (existing) {
-      throw new ConflictException('Email already allowed');
-    }
-
-    const created = await this.prisma.allowedEmail.create({
-      data: { email: normalizedEmail },
+      update: { role },
+      create: {
+        email: normalizedEmail,
+        role,
+      },
     });
 
     await this.prisma.user.updateMany({
       where: {
         email: normalizedEmail,
-        role: 'TECH',
       },
       data: {
         isActive: true,
+        role,
       },
     });
 
-    return created;
+    return saved;
   }
 
   async remove(id: string) {
@@ -59,10 +56,10 @@ export class AccessListService {
     await this.prisma.user.updateMany({
       where: {
         email: allowedEmail.email,
-        role: 'TECH',
       },
       data: {
         isActive: false,
+        role: UserRole.TECH,
       },
     });
 

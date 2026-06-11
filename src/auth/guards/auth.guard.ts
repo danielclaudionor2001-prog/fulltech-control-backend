@@ -97,18 +97,18 @@ export class ClerkAuthGuard implements CanActivate {
 
     const allowedEmailEntry = await this.prisma.allowedEmail.findUnique({
       where: { email: normalizedEmail },
-      select: { id: true },
+      select: { id: true, role: true },
     });
 
     const shouldBeAdmin =
       normalizedEmail === firstAdminEmail ||
       configuredAdminEmails.has(normalizedEmail) ||
+      allowedEmailEntry?.role === UserRole.ADMIN ||
       existingUser?.role === UserRole.ADMIN;
-    const isAllowedTechnician = Boolean(allowedEmailEntry);
     const role = shouldBeAdmin
       ? UserRole.ADMIN
-      : (existingUser?.role ?? UserRole.TECH);
-    const isActive = shouldBeAdmin || isAllowedTechnician;
+      : (allowedEmailEntry?.role ?? existingUser?.role ?? UserRole.TECH);
+    const isActive = shouldBeAdmin || Boolean(allowedEmailEntry);
 
     return this.prisma.user.upsert({
       where: { clerkUserId },

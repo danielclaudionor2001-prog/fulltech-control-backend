@@ -26,7 +26,7 @@ export class AccessListController {
 
   @Post()
   create(@Body() dto: CreateAllowedEmailDto) {
-    return this.accessListService.create(dto.email);
+    return this.accessListService.create(dto.email, dto.role);
   }
 
   @Delete(':id')

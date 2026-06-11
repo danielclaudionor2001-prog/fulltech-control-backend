@@ -64,9 +64,12 @@ model User {
 model AllowedEmail {
   id    String @id @default(uuid())
   email String @unique
+  role  UserRole @default(TECH)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([role, email])
 }
 
 model Customer {
