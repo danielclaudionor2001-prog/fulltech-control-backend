@@ -75,7 +75,10 @@ export class ServiceOrdersService {
 
   async create(dto: CreateServiceOrderDto, actor: CurrentUserPayload) {
     const scheduleAt = this.buildScheduleAt(dto.scheduleDate, dto.scheduleTime);
-    const assignedToId = this.asNullable(dto.assignedToId);
+    const assignedToId =
+      actor.role === UserRole.ADMIN
+        ? this.asNullable(dto.assignedToId)
+        : actor.id;
 
     if (assignedToId) {
       await this.assertAssignableUser(assignedToId);
@@ -315,7 +318,7 @@ export class ServiceOrdersService {
   private async assertAssignableUser(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { isActive: true, role: true },
+      select: { isActive: true },
     });
 
     if (!user) {
@@ -323,11 +326,6 @@ export class ServiceOrdersService {
     }
     if (!user.isActive) {
       throw new BadRequestException('Assigned user is inactive');
-    }
-    if (user.role !== UserRole.TECH) {
-      throw new BadRequestException(
-        'Only technicians can be assigned to service orders',
-      );
     }
   }
 

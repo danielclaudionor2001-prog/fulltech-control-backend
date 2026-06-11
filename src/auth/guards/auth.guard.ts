@@ -169,9 +169,16 @@ export class ClerkAuthGuard implements CanActivate {
       throw new UnauthorizedException('Clerk user without primary email');
     }
 
-    const fullName =
-      [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(' ') ||
-      null;
+    const firstName = clerkUser.firstName?.trim();
+    const lastName = clerkUser.lastName?.trim();
+
+    if (!firstName || !lastName) {
+      throw new ForbiddenException(
+        'Complete first and last name in Clerk before accessing the application',
+      );
+    }
+
+    const fullName = `${firstName} ${lastName}`;
 
     const localUser = await this.resolveLocalUser(
       clerkUserId,

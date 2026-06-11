@@ -31,7 +31,7 @@ export class ServiceOrdersController {
   }
 
   @Post()
-  @Roles('ADMIN')
+  @Roles('ADMIN', 'TECH')
   create(
     @Body() dto: CreateServiceOrderDto,
     @CurrentUser() user: CurrentUserPayload,
