@@ -82,17 +82,24 @@ export class ClerkAuthGuard implements CanActivate {
     const configuredAdminEmails = this.getAdminEmails();
     const firstAdminEmail = this.getFirstAdminEmail();
 
-    const existingUser = await this.prisma.user.findUnique({
+    const userSelect = {
+      clerkUserId: true,
+      email: true,
+      id: true,
+      imageUrl: true,
+      isActive: true,
+      name: true,
+      role: true,
+    } as const;
+
+    const existingUserByClerkId = await this.prisma.user.findUnique({
       where: { clerkUserId },
-      select: {
-        clerkUserId: true,
-        email: true,
-        id: true,
-        imageUrl: true,
-        isActive: true,
-        name: true,
-        role: true,
-      },
+      select: userSelect,
+    });
+
+    const existingUserByEmail = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: userSelect,
     });
 
     const allowedEmailEntry = await this.prisma.allowedEmail.findUnique({
@@ -104,22 +111,48 @@ export class ClerkAuthGuard implements CanActivate {
       normalizedEmail === firstAdminEmail ||
       configuredAdminEmails.has(normalizedEmail) ||
       allowedEmailEntry?.role === UserRole.ADMIN ||
-      existingUser?.role === UserRole.ADMIN;
+      existingUserByClerkId?.role === UserRole.ADMIN ||
+      existingUserByEmail?.role === UserRole.ADMIN;
+    const existingUser = existingUserByClerkId ?? existingUserByEmail;
     const role = shouldBeAdmin
       ? UserRole.ADMIN
       : (allowedEmailEntry?.role ?? existingUser?.role ?? UserRole.TECH);
     const isActive = shouldBeAdmin || Boolean(allowedEmailEntry);
 
-    return this.prisma.user.upsert({
-      where: { clerkUserId },
-      update: {
-        email: normalizedEmail,
-        imageUrl,
-        isActive,
-        name,
-        role,
-      },
-      create: {
+    if (
+      existingUserByClerkId &&
+      existingUserByEmail &&
+      existingUserByClerkId.id !== existingUserByEmail.id
+    ) {
+      throw new ForbiddenException(
+        'This email is already linked to another local user',
+      );
+    }
+
+    if (existingUser) {
+      return this.prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          clerkUserId,
+          email: normalizedEmail,
+          imageUrl,
+          isActive,
+          name,
+          role,
+        },
+        select: {
+          email: true,
+          id: true,
+          imageUrl: true,
+          isActive: true,
+          name: true,
+          role: true,
+        },
+      });
+    }
+
+    return this.prisma.user.create({
+      data: {
         clerkUserId,
         email: normalizedEmail,
         imageUrl,
