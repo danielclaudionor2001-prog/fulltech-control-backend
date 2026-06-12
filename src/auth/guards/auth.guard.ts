@@ -72,6 +72,23 @@ export class ClerkAuthGuard implements CanActivate {
     );
   }
 
+  private async ensurePrimaryAdminAccess(email: string) {
+    const firstAdminEmail = this.getFirstAdminEmail();
+
+    if (!firstAdminEmail || email !== firstAdminEmail) {
+      return;
+    }
+
+    await this.prisma.allowedEmail.upsert({
+      where: { email },
+      update: { role: UserRole.ADMIN },
+      create: {
+        email,
+        role: UserRole.ADMIN,
+      },
+    });
+  }
+
   private async resolveLocalUser(
     clerkUserId: string,
     email: string,
@@ -79,6 +96,8 @@ export class ClerkAuthGuard implements CanActivate {
     imageUrl: string | null,
   ): Promise<LocalUserPayload> {
     const normalizedEmail = email.trim().toLowerCase();
+    await this.ensurePrimaryAdminAccess(normalizedEmail);
+
     const configuredAdminEmails = this.getAdminEmails();
     const firstAdminEmail = this.getFirstAdminEmail();
 

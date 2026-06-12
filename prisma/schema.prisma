@@ -54,10 +54,6 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relações com OS
-  createdOrders  ServiceOrder[] @relation("createdBy")
-  assignedOrders ServiceOrder[] @relation("assignedTo")
-
   @@index([role, isActive])
 }
 
@@ -103,13 +99,15 @@ model ServiceOrder {
 
   status ServiceOrderStatus @default(OPEN)
 
-  // Quem criou (normalmente ADMIN)
-  createdById String
-  createdBy   User   @relation("createdBy", fields: [createdById], references: [id])
+  // Quem abriu/criou a OS (snapshot sem relacionamento)
+  createdById    String?
+  createdByName  String?
+  createdByEmail String?
 
-  // Técnico responsável (opcional)
-  assignedToId String?
-  assignedTo   User?   @relation("assignedTo", fields: [assignedToId], references: [id])
+  // Responsável pela OS sem chave estrangeira
+  assignedToId    String?
+  assignedToName  String?
+  assignedToEmail String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

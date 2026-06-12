@@ -7,6 +7,7 @@ import {
 import { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import {
   Prisma,
+  ServiceOrder as ServiceOrderModel,
   ServiceOrderDeadline,
   ServiceOrderStatus,
   ServiceOrderType,
@@ -19,26 +20,18 @@ import { CreateServiceOrderDto } from './dto/create-service-order.dto';
 import { StartServiceOrderDto } from './dto/start-service-order.dto';
 import { UpdateServiceOrderDto } from './dto/update-service-order.dto';
 
-const baseOrderInclude = {
-  assignedTo: {
-    select: {
-      clerkUserId: true,
-      email: true,
-      id: true,
-      name: true,
-      role: true,
-    },
-  },
-  createdBy: {
-    select: {
-      clerkUserId: true,
-      email: true,
-      id: true,
-      name: true,
-      role: true,
-    },
-  },
-} satisfies Prisma.ServiceOrderInclude;
+type ServiceOrderActor = {
+  clerkUserId: string | null;
+  email: string | null;
+  id: string | null;
+  name: string | null;
+  role: UserRole | null;
+};
+
+type ServiceOrderResponse = ServiceOrderModel & {
+  assignedTo: ServiceOrderActor | null;
+  createdBy: ServiceOrderActor | null;
+};
 
 @Injectable()
 export class ServiceOrdersService {
@@ -62,45 +55,48 @@ export class ServiceOrdersService {
             ],
           };
 
-    return this.prisma.serviceOrder.findMany({
+    const orders = await this.prisma.serviceOrder.findMany({
       where,
       orderBy: [
         { status: 'asc' },
         { scheduleAt: 'asc' },
         { createdAt: 'desc' },
       ],
-      include: baseOrderInclude,
     });
+
+    return this.decorateServiceOrders(orders);
   }
 
   async create(dto: CreateServiceOrderDto, actor: CurrentUserPayload) {
     const scheduleAt = this.buildScheduleAt(dto.scheduleDate, dto.scheduleTime);
-    const assignedToId =
+    const assignedTo =
       actor.role === UserRole.ADMIN
-        ? this.asNullable(dto.assignedToId)
-        : actor.id;
+        ? await this.resolveAssignableUser(this.asNullable(dto.assignedToId))
+        : this.toActorSnapshot(actor);
 
-    if (assignedToId) {
-      await this.assertAssignableUser(assignedToId);
-    }
-
-    return this.prisma.serviceOrder.create({
+    const createdOrder = await this.prisma.serviceOrder.create({
       data: {
-        identifier: this.asNullable(dto.identifier),
-        osType: dto.osType,
-        deadline: dto.deadline ?? null,
+        address: this.asNullable(dto.address),
+        assignedToEmail: assignedTo?.email ?? null,
+        assignedToId: assignedTo?.id ?? null,
+        assignedToName: assignedTo?.name ?? null,
+        collaborator: this.asNullable(dto.collaborator),
+        createdByEmail: actor.email ?? null,
+        createdById: actor.id,
+        createdByName: actor.name ?? null,
         customer: dto.customer.trim(),
+        deadline: dto.deadline ?? null,
         description: dto.description.trim(),
         durationMinutes: dto.durationMinutes,
+        identifier: this.asNullable(dto.identifier),
+        osType: dto.osType,
         scheduleAt,
         scheduleTimeText: this.asNullable(dto.scheduleTime),
-        collaborator: this.asNullable(dto.collaborator),
-        address: this.asNullable(dto.address),
-        createdById: actor.id,
-        assignedToId: assignedToId ?? null,
+        status: assignedTo ? ServiceOrderStatus.IN_PROGRESS : ServiceOrderStatus.OPEN,
       },
-      include: baseOrderInclude,
     });
+
+    return this.decorateServiceOrder(createdOrder);
   }
 
   async update(
@@ -117,10 +113,12 @@ export class ServiceOrdersService {
     }
 
     if (actor.role === UserRole.TECH) {
-      return this.updateAsTechnician(existing, dto, actor);
+      const updatedOrder = await this.updateAsTechnician(existing, dto, actor);
+      return this.decorateServiceOrder(updatedOrder);
     }
 
-    return this.updateAsAdmin(existing, dto);
+    const updatedOrder = await this.updateAsAdmin(existing, dto);
+    return this.decorateServiceOrder(updatedOrder);
   }
 
   async start(
@@ -130,7 +128,6 @@ export class ServiceOrdersService {
   ) {
     const existing = await this.prisma.serviceOrder.findUnique({
       where: { id },
-      include: baseOrderInclude,
     });
 
     if (!existing) {
@@ -157,10 +154,11 @@ export class ServiceOrdersService {
     const updatedOrder = await this.prisma.serviceOrder.update({
       where: { id: existing.id },
       data: {
+        assignedToEmail: actor.email ?? null,
         assignedToId: actor.id,
+        assignedToName: actor.name ?? null,
         status: ServiceOrderStatus.IN_PROGRESS,
       },
-      include: baseOrderInclude,
     });
 
     try {
@@ -177,49 +175,122 @@ export class ServiceOrdersService {
       // The service order should still start even if the notification provider fails.
     }
 
-    return updatedOrder;
+    return this.decorateServiceOrder(updatedOrder);
+  }
+
+  private async decorateServiceOrders(
+    orders: ServiceOrderModel[],
+  ): Promise<ServiceOrderResponse[]> {
+    const relatedUserIds = Array.from(
+      new Set(
+        orders
+          .flatMap((order) => [order.createdById, order.assignedToId])
+          .filter((userId): userId is string => Boolean(userId)),
+      ),
+    );
+
+    const users =
+      relatedUserIds.length > 0
+        ? await this.prisma.user.findMany({
+            where: {
+              id: {
+                in: relatedUserIds,
+              },
+            },
+            select: {
+              clerkUserId: true,
+              email: true,
+              id: true,
+              name: true,
+              role: true,
+            },
+          })
+        : [];
+
+    const usersById = new Map(
+      users.map((user) => [user.id, this.toActorSnapshot(user)]),
+    );
+
+    return orders.map((order) => ({
+      ...order,
+      assignedTo:
+        (order.assignedToId ? usersById.get(order.assignedToId) : null) ??
+        this.buildFallbackActor(
+          order.assignedToId,
+          order.assignedToName,
+          order.assignedToEmail,
+        ),
+      createdBy:
+        (order.createdById ? usersById.get(order.createdById) : null) ??
+        this.buildFallbackActor(
+          order.createdById,
+          order.createdByName,
+          order.createdByEmail,
+        ),
+    }));
+  }
+
+  private async decorateServiceOrder(
+    order: ServiceOrderModel,
+  ): Promise<ServiceOrderResponse> {
+    const [decoratedOrder] = await this.decorateServiceOrders([order]);
+    return decoratedOrder;
   }
 
   private async updateAsAdmin(
-    existing: { id: string; scheduleAt: Date; scheduleTimeText: string | null },
+    existing: Pick<
+      ServiceOrderModel,
+      'assignedToId' | 'id' | 'scheduleAt' | 'scheduleTimeText' | 'status'
+    >,
     dto: UpdateServiceOrderDto,
   ) {
-    const data: {
-      address?: string | null;
-      assignedToId?: string | null;
-      collaborator?: string | null;
-      customer?: string;
-      deadline?: ServiceOrderDeadline | null;
-      description?: string;
-      durationMinutes?: number;
-      identifier?: string | null;
-      osType?: ServiceOrderType;
-      scheduleAt?: Date;
-      scheduleTimeText?: string | null;
-      status?: ServiceOrderStatus;
-    } = {};
+    const data: Prisma.ServiceOrderUpdateInput = {};
 
-    if (dto.identifier !== undefined)
+    if (dto.identifier !== undefined) {
       data.identifier = this.asNullable(dto.identifier);
-    if (dto.osType !== undefined) data.osType = dto.osType;
-    if (dto.deadline !== undefined) data.deadline = dto.deadline;
-    if (dto.customer !== undefined) data.customer = dto.customer.trim();
-    if (dto.description !== undefined)
+    }
+    if (dto.osType !== undefined) {
+      data.osType = dto.osType;
+    }
+    if (dto.deadline !== undefined) {
+      data.deadline = dto.deadline;
+    }
+    if (dto.customer !== undefined) {
+      data.customer = dto.customer.trim();
+    }
+    if (dto.description !== undefined) {
       data.description = dto.description.trim();
-    if (dto.durationMinutes !== undefined)
+    }
+    if (dto.durationMinutes !== undefined) {
       data.durationMinutes = dto.durationMinutes;
-    if (dto.collaborator !== undefined)
+    }
+    if (dto.collaborator !== undefined) {
       data.collaborator = this.asNullable(dto.collaborator);
-    if (dto.address !== undefined) data.address = this.asNullable(dto.address);
-    if (dto.status !== undefined) data.status = dto.status;
+    }
+    if (dto.address !== undefined) {
+      data.address = this.asNullable(dto.address);
+    }
+    if (dto.status !== undefined) {
+      data.status = dto.status;
+    }
 
     if (dto.assignedToId !== undefined) {
-      const assignedToId = this.asNullable(dto.assignedToId);
-      if (assignedToId) {
-        await this.assertAssignableUser(assignedToId);
-        data.assignedToId = assignedToId;
-      } else {
-        data.assignedToId = null;
+      const assignedTo = await this.resolveAssignableUser(
+        this.asNullable(dto.assignedToId),
+      );
+
+      data.assignedToEmail = assignedTo?.email ?? null;
+      data.assignedToId = assignedTo?.id ?? null;
+      data.assignedToName = assignedTo?.name ?? null;
+
+      if (dto.status === undefined) {
+        if (assignedTo && existing.status === ServiceOrderStatus.OPEN) {
+          data.status = ServiceOrderStatus.IN_PROGRESS;
+        }
+
+        if (!assignedTo && existing.status === ServiceOrderStatus.IN_PROGRESS) {
+          data.status = ServiceOrderStatus.OPEN;
+        }
       }
     }
 
@@ -237,16 +308,11 @@ export class ServiceOrdersService {
     return this.prisma.serviceOrder.update({
       where: { id: existing.id },
       data,
-      include: baseOrderInclude,
     });
   }
 
   private async updateAsTechnician(
-    existing: {
-      assignedToId: string | null;
-      id: string;
-      status: ServiceOrderStatus;
-    },
+    existing: Pick<ServiceOrderModel, 'assignedToId' | 'id' | 'status'>,
     dto: UpdateServiceOrderDto,
     actor: CurrentUserPayload,
   ) {
@@ -311,22 +377,69 @@ export class ServiceOrdersService {
       data: {
         status: dto.status,
       },
-      include: baseOrderInclude,
     });
   }
 
-  private async assertAssignableUser(userId: string) {
+  private async resolveAssignableUser(userId: string | null) {
+    if (!userId) {
+      return null;
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { isActive: true },
+      select: {
+        clerkUserId: true,
+        email: true,
+        id: true,
+        isActive: true,
+        name: true,
+        role: true,
+      },
     });
 
     if (!user) {
       throw new BadRequestException('Assigned user not found');
     }
+
     if (!user.isActive) {
       throw new BadRequestException('Assigned user is inactive');
     }
+
+    return this.toActorSnapshot(user);
+  }
+
+  private toActorSnapshot(actor: {
+    clerkUserId: string;
+    email?: string | null;
+    id: string;
+    name?: string | null;
+    role: UserRole;
+  }): ServiceOrderActor {
+    return {
+      clerkUserId: actor.clerkUserId,
+      email: actor.email ?? null,
+      id: actor.id,
+      name: actor.name ?? null,
+      role: actor.role,
+    };
+  }
+
+  private buildFallbackActor(
+    id?: string | null,
+    name?: string | null,
+    email?: string | null,
+  ): ServiceOrderActor | null {
+    if (!id && !name && !email) {
+      return null;
+    }
+
+    return {
+      clerkUserId: null,
+      email: email ?? null,
+      id: id ?? null,
+      name: name ?? null,
+      role: null,
+    };
   }
 
   private buildScheduleAt(scheduleDate: string, scheduleTime?: string) {
