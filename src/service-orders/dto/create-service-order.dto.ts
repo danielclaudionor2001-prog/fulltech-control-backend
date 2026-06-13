@@ -1,12 +1,11 @@
-import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsEnum,
-  IsInt,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
-  Min,
 } from 'class-validator';
 import { ServiceOrderDeadline, ServiceOrderType } from '../../generated/prisma';
 
@@ -27,14 +26,23 @@ export class CreateServiceOrderDto {
   @MaxLength(160)
   customer!: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  customerEmail?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  customerPhones?: string[];
+
   @IsString()
   @MaxLength(5000)
   description!: string;
 
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  durationMinutes!: number;
+  @IsOptional()
+  durationMinutes?: number | string | null;
 
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
   scheduleDate!: string;
@@ -42,11 +50,6 @@ export class CreateServiceOrderDto {
   @IsOptional()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   scheduleTime?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  collaborator?: string;
 
   @IsOptional()
   @IsString()

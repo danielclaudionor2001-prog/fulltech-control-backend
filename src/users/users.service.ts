@@ -27,7 +27,9 @@ export class UsersService {
     return this.prisma.user.findMany({
       where: {
         isActive: true,
-        role: UserRole.TECH,
+        role: {
+          in: [UserRole.SUPERVISOR, UserRole.TECH],
+        },
       },
       orderBy: [{ name: 'asc' }, { email: 'asc' }],
       select: {

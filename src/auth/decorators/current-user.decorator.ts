@@ -5,7 +5,7 @@ export type CurrentUserPayload = {
   id: string; // ID local (Prisma User.id)
   imageUrl?: string | null;
   clerkUserId: string;
-  role: 'ADMIN' | 'TECH';
+  role: 'ADMIN' | 'SUPERVISOR' | 'TECH';
   name?: string | null;
   isActive: boolean;
 };

@@ -21,7 +21,7 @@ export class LocationsController {
   }
 
   @Post()
-  @Roles('TECH')
+  @Roles('SUPERVISOR', 'TECH')
   updateLocation(
     @Body() dto: UpdateLocationDto,
     @CurrentUser() user: CurrentUserPayload,

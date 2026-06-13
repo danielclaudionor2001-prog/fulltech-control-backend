@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -15,6 +16,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { ClerkAuthGuard } from '../auth/guards/auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
+import { FindServiceOrdersQueryDto } from './dto/find-service-orders-query.dto';
 import { StartServiceOrderDto } from './dto/start-service-order.dto';
 import { UpdateServiceOrderDto } from './dto/update-service-order.dto';
 import { ServiceOrdersService } from './service-orders.service';
@@ -25,13 +27,16 @@ export class ServiceOrdersController {
   constructor(private readonly serviceOrdersService: ServiceOrdersService) {}
 
   @Get()
-  @Roles('ADMIN', 'TECH')
-  findAll(@CurrentUser() user: CurrentUserPayload) {
-    return this.serviceOrdersService.findAll(user);
+  @Roles('ADMIN', 'SUPERVISOR', 'TECH')
+  findAll(
+    @CurrentUser() user: CurrentUserPayload,
+    @Query() query: FindServiceOrdersQueryDto,
+  ) {
+    return this.serviceOrdersService.findAll(user, query);
   }
 
   @Post()
-  @Roles('ADMIN', 'TECH')
+  @Roles('ADMIN')
   create(
     @Body() dto: CreateServiceOrderDto,
     @CurrentUser() user: CurrentUserPayload,
@@ -40,7 +45,7 @@ export class ServiceOrdersController {
   }
 
   @Post(':id/start')
-  @Roles('TECH')
+  @Roles('SUPERVISOR', 'TECH')
   start(
     @Param('id') id: string,
     @Body() dto: StartServiceOrderDto,
@@ -50,7 +55,7 @@ export class ServiceOrdersController {
   }
 
   @Patch(':id')
-  @Roles('ADMIN', 'TECH')
+  @Roles('ADMIN', 'SUPERVISOR', 'TECH')
   update(
     @Param('id') id: string,
     @Body() dto: UpdateServiceOrderDto,

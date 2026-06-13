@@ -7,14 +7,16 @@ import {
   MaxLength,
 } from 'class-validator';
 
-export class CreateCustomerDto {
+export class UpdateCustomerDto {
+  @IsOptional()
   @IsString()
   @MaxLength(160)
-  name!: string;
+  name?: string;
 
+  @IsOptional()
   @IsString()
   @MaxLength(255)
-  address!: string;
+  address?: string;
 
   @IsOptional()
   @IsEmail()

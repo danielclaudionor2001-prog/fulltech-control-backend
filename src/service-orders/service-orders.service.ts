@@ -17,6 +17,7 @@ import { LocationsService } from '../locations/locations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
+import { FindServiceOrdersQueryDto } from './dto/find-service-orders-query.dto';
 import { StartServiceOrderDto } from './dto/start-service-order.dto';
 import { UpdateServiceOrderDto } from './dto/update-service-order.dto';
 
@@ -41,8 +42,11 @@ export class ServiceOrdersService {
     private readonly whatsAppService: WhatsAppService,
   ) {}
 
-  async findAll(actor: CurrentUserPayload) {
-    const where =
+  async findAll(
+    actor: CurrentUserPayload,
+    query: FindServiceOrdersQueryDto = {},
+  ) {
+    const visibilityWhere: Prisma.ServiceOrderWhereInput =
       actor.role === UserRole.ADMIN
         ? {}
         : {
@@ -54,6 +58,11 @@ export class ServiceOrdersService {
               },
             ],
           };
+    const filterWhere = this.buildFindWhere(query);
+    const where: Prisma.ServiceOrderWhereInput =
+      Object.keys(filterWhere).length > 0
+        ? { AND: [visibilityWhere, filterWhere] }
+        : visibilityWhere;
 
     const orders = await this.prisma.serviceOrder.findMany({
       where,
@@ -68,11 +77,16 @@ export class ServiceOrdersService {
   }
 
   async create(dto: CreateServiceOrderDto, actor: CurrentUserPayload) {
+    if (actor.role !== UserRole.ADMIN) {
+      throw new ForbiddenException(
+        'Only administrators can create service orders',
+      );
+    }
+
     const scheduleAt = this.buildScheduleAt(dto.scheduleDate, dto.scheduleTime);
-    const assignedTo =
-      actor.role === UserRole.ADMIN
-        ? await this.resolveAssignableUser(this.asNullable(dto.assignedToId))
-        : this.toActorSnapshot(actor);
+    const assignedTo = await this.resolveAssignableUser(
+      this.asNullable(dto.assignedToId),
+    );
 
     const createdOrder = await this.prisma.serviceOrder.create({
       data: {
@@ -80,14 +94,15 @@ export class ServiceOrdersService {
         assignedToEmail: assignedTo?.email ?? null,
         assignedToId: assignedTo?.id ?? null,
         assignedToName: assignedTo?.name ?? null,
-        collaborator: this.asNullable(dto.collaborator),
         createdByEmail: actor.email ?? null,
         createdById: actor.id,
         createdByName: actor.name ?? null,
         customer: dto.customer.trim(),
+        customerEmail: this.asNullable(dto.customerEmail),
+        customerPhones: this.normalizeStringList(dto.customerPhones),
         deadline: dto.deadline ?? null,
         description: dto.description.trim(),
-        durationMinutes: dto.durationMinutes,
+        durationMinutes: this.normalizeDurationMinutes(dto.durationMinutes),
         identifier: this.asNullable(dto.identifier),
         osType: dto.osType,
         scheduleAt,
@@ -112,7 +127,7 @@ export class ServiceOrdersService {
       throw new NotFoundException('Service order not found');
     }
 
-    if (actor.role === UserRole.TECH) {
+    if (actor.role !== UserRole.ADMIN) {
       const updatedOrder = await this.updateAsTechnician(existing, dto, actor);
       return this.decorateServiceOrder(updatedOrder);
     }
@@ -136,6 +151,7 @@ export class ServiceOrdersService {
 
     if (
       existing.status === ServiceOrderStatus.DONE ||
+      existing.status === ServiceOrderStatus.WITH_PENDING ||
       existing.status === ServiceOrderStatus.CANCELED
     ) {
       throw new ForbiddenException(
@@ -240,7 +256,12 @@ export class ServiceOrdersService {
   private async updateAsAdmin(
     existing: Pick<
       ServiceOrderModel,
-      'assignedToId' | 'id' | 'scheduleAt' | 'scheduleTimeText' | 'status'
+      | 'assignedToId'
+      | 'customerSignature'
+      | 'id'
+      | 'scheduleAt'
+      | 'scheduleTimeText'
+      | 'status'
     >,
     dto: UpdateServiceOrderDto,
   ) {
@@ -258,19 +279,44 @@ export class ServiceOrdersService {
     if (dto.customer !== undefined) {
       data.customer = dto.customer.trim();
     }
+    if (dto.customerEmail !== undefined) {
+      data.customerEmail = this.asNullable(dto.customerEmail);
+    }
+    if (dto.customerPhones !== undefined) {
+      data.customerPhones = this.normalizeStringList(dto.customerPhones);
+    }
     if (dto.description !== undefined) {
       data.description = dto.description.trim();
     }
     if (dto.durationMinutes !== undefined) {
-      data.durationMinutes = dto.durationMinutes;
-    }
-    if (dto.collaborator !== undefined) {
-      data.collaborator = this.asNullable(dto.collaborator);
+      data.durationMinutes = this.normalizeDurationMinutes(dto.durationMinutes);
     }
     if (dto.address !== undefined) {
       data.address = this.asNullable(dto.address);
     }
+    if (dto.completionDescription !== undefined) {
+      data.completionDescription = this.asNullable(dto.completionDescription);
+    }
+    if (dto.completionPhotos !== undefined) {
+      data.completionPhotos = this.normalizeStringList(dto.completionPhotos);
+    }
+    if (dto.customerSignature !== undefined) {
+      data.customerSignature = this.asNullable(dto.customerSignature);
+    }
+    if (dto.defectAdjusted !== undefined) {
+      data.defectAdjusted = dto.defectAdjusted;
+    }
+    if (dto.defectSolution !== undefined) {
+      data.defectSolution = this.asNullable(dto.defectSolution);
+    }
+    if (dto.equipmentStatus !== undefined) {
+      data.equipmentStatus = this.asNullable(dto.equipmentStatus);
+    }
     if (dto.status !== undefined) {
+      this.ensureCanSetFinalStatus(dto.status, {
+        customerSignature:
+          this.asNullable(dto.customerSignature) ?? existing.customerSignature,
+      });
       data.status = dto.status;
     }
 
@@ -321,11 +367,12 @@ export class ServiceOrdersService {
       'osType',
       'deadline',
       'customer',
+      'customerEmail',
+      'customerPhones',
       'description',
       'durationMinutes',
       'scheduleDate',
       'scheduleTime',
-      'collaborator',
       'address',
       'assignedToId',
     ].filter(
@@ -350,6 +397,7 @@ export class ServiceOrdersService {
 
     if (
       existing.status === ServiceOrderStatus.DONE ||
+      existing.status === ServiceOrderStatus.WITH_PENDING ||
       existing.status === ServiceOrderStatus.CANCELED
     ) {
       throw new ForbiddenException(
@@ -365,18 +413,47 @@ export class ServiceOrdersService {
 
     if (
       dto.status !== ServiceOrderStatus.IN_PROGRESS &&
-      dto.status !== ServiceOrderStatus.DONE
+      dto.status !== ServiceOrderStatus.DONE &&
+      dto.status !== ServiceOrderStatus.WITH_PENDING
     ) {
       throw new ForbiddenException(
         'Technicians can only keep progress or finish the service order',
       );
     }
 
+    const isFinalStatus =
+      dto.status === ServiceOrderStatus.DONE ||
+      dto.status === ServiceOrderStatus.WITH_PENDING;
+    if (isFinalStatus) {
+      this.validateTechnicianConclusion(dto);
+    }
+
+    const data: Prisma.ServiceOrderUpdateInput = {
+      status: dto.status,
+    };
+
+    if (dto.completionDescription !== undefined) {
+      data.completionDescription = this.asNullable(dto.completionDescription);
+    }
+    if (dto.completionPhotos !== undefined) {
+      data.completionPhotos = this.normalizeStringList(dto.completionPhotos);
+    }
+    if (dto.customerSignature !== undefined) {
+      data.customerSignature = this.asNullable(dto.customerSignature);
+    }
+    if (dto.defectAdjusted !== undefined) {
+      data.defectAdjusted = dto.defectAdjusted;
+    }
+    if (dto.defectSolution !== undefined) {
+      data.defectSolution = this.asNullable(dto.defectSolution);
+    }
+    if (dto.equipmentStatus !== undefined) {
+      data.equipmentStatus = this.asNullable(dto.equipmentStatus);
+    }
+
     return this.prisma.serviceOrder.update({
       where: { id: existing.id },
-      data: {
-        status: dto.status,
-      },
+      data,
     });
   }
 
@@ -405,7 +482,87 @@ export class ServiceOrdersService {
       throw new BadRequestException('Assigned user is inactive');
     }
 
+    if (user.role === UserRole.ADMIN) {
+      throw new BadRequestException(
+        'Assigned user must be a technician or supervisor',
+      );
+    }
+
     return this.toActorSnapshot(user);
+  }
+
+  private buildFindWhere(query: FindServiceOrdersQueryDto) {
+    const where: Prisma.ServiceOrderWhereInput = {};
+
+    if (query.assignedToId) {
+      where.assignedToId = query.assignedToId;
+    }
+
+    if (query.customer?.trim()) {
+      where.customer = {
+        contains: query.customer.trim(),
+        mode: 'insensitive',
+      };
+    }
+
+    if (query.startDate || query.endDate) {
+      const startDate = query.startDate
+        ? this.parseDateBoundary(query.startDate, 'start')
+        : null;
+      const endDate = query.endDate
+        ? this.parseDateBoundary(query.endDate, 'end')
+        : null;
+
+      if (startDate && endDate && startDate > endDate) {
+        throw new BadRequestException('Invalid date range');
+      }
+
+      where.scheduleAt = {
+        ...(startDate ? { gte: startDate } : {}),
+        ...(endDate ? { lte: endDate } : {}),
+      };
+    }
+
+    return where;
+  }
+
+  private ensureCanSetFinalStatus(
+    status: ServiceOrderStatus,
+    data: { customerSignature?: string | null },
+  ) {
+    const isFinalStatus =
+      status === ServiceOrderStatus.DONE ||
+      status === ServiceOrderStatus.WITH_PENDING;
+
+    if (isFinalStatus && !data.customerSignature) {
+      throw new BadRequestException(
+        'Customer signature is required to finish the service order',
+      );
+    }
+  }
+
+  private validateTechnicianConclusion(dto: UpdateServiceOrderDto) {
+    if (!this.asNullable(dto.completionDescription)) {
+      throw new BadRequestException('Completion description is required');
+    }
+
+    if (dto.defectAdjusted === undefined) {
+      throw new BadRequestException('Defect status is required');
+    }
+
+    if (!this.asNullable(dto.defectSolution)) {
+      throw new BadRequestException('Defect solution is required');
+    }
+
+    if (!this.asNullable(dto.equipmentStatus)) {
+      throw new BadRequestException('Equipment status is required');
+    }
+
+    if (!this.asNullable(dto.customerSignature)) {
+      throw new BadRequestException(
+        'Customer signature is required to finish the service order',
+      );
+    }
   }
 
   private toActorSnapshot(actor: {
@@ -451,6 +608,28 @@ export class ServiceOrdersService {
     }
 
     return scheduleAt;
+  }
+
+  private parseDateBoundary(value: string, boundary: 'end' | 'start') {
+    const suffix = boundary === 'start' ? 'T00:00:00.000' : 'T23:59:59.999';
+    const date = new Date(`${value}${suffix}`);
+
+    if (Number.isNaN(date.getTime())) {
+      throw new BadRequestException('Invalid filter date');
+    }
+
+    return date;
+  }
+
+  private normalizeStringList(values?: string[]) {
+    return Array.from(
+      new Set((values ?? []).map((value) => value.trim()).filter(Boolean)),
+    );
+  }
+
+  private normalizeDurationMinutes(value?: number | string | null) {
+    const duration = Number(value);
+    return Number.isInteger(duration) && duration > 0 ? duration : 1;
   }
 
   private asNullable(value?: string | null) {

@@ -1,12 +1,12 @@
-import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
+  IsBoolean,
   IsEnum,
-  IsInt,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
-  Min,
 } from 'class-validator';
 import {
   ServiceOrderDeadline,
@@ -35,14 +35,22 @@ export class UpdateServiceOrderDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(160)
+  customerEmail?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @IsString({ each: true })
+  customerPhones?: string[];
+
+  @IsOptional()
+  @IsString()
   @MaxLength(5000)
   description?: string;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  durationMinutes?: number;
+  durationMinutes?: number | string | null;
 
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/)
@@ -51,11 +59,6 @@ export class UpdateServiceOrderDto {
   @IsOptional()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
   scheduleTime?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  collaborator?: string;
 
   @IsOptional()
   @IsString()
@@ -69,4 +72,34 @@ export class UpdateServiceOrderDto {
   @IsOptional()
   @IsString()
   assignedToId?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(5000)
+  completionDescription?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @IsString({ each: true })
+  completionPhotos?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100000)
+  customerSignature?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  defectAdjusted?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  defectSolution?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  equipmentStatus?: string;
 }
