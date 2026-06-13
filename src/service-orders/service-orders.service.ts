@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -86,30 +87,36 @@ export class ServiceOrdersService {
       this.asNullable(dto.assignedToId),
     );
 
-    const createdOrder = await this.prisma.serviceOrder.create({
-      data: {
-        address: this.asNullable(dto.address),
-        assignedToEmail: assignedTo?.email ?? null,
-        assignedToId: assignedTo?.id ?? null,
-        assignedToName: assignedTo?.name ?? null,
-        createdByEmail: actor.email ?? null,
-        createdById: actor.id,
-        createdByName: actor.name ?? null,
-        customer: dto.customer.trim(),
-        customerEmail: this.asNullable(dto.customerEmail),
-        customerPhones: this.normalizeStringList(dto.customerPhones),
-        deadline: dto.deadline ?? null,
-        description: dto.description.trim(),
-        durationMinutes: this.normalizeDurationMinutes(dto.durationMinutes),
-        identifier: this.asNullable(dto.identifier),
-        osType: dto.osType,
-        scheduleAt,
-        scheduleTimeText: this.asNullable(dto.scheduleTime),
-        status: assignedTo
-          ? ServiceOrderStatus.IN_PROGRESS
-          : ServiceOrderStatus.OPEN,
-      },
-    });
+    let createdOrder: ServiceOrderModel;
+
+    try {
+      createdOrder = await this.prisma.serviceOrder.create({
+        data: {
+          address: this.asNullable(dto.address),
+          assignedToEmail: assignedTo?.email ?? null,
+          assignedToId: assignedTo?.id ?? null,
+          assignedToName: assignedTo?.name ?? null,
+          createdByEmail: actor.email ?? null,
+          createdById: actor.id,
+          createdByName: actor.name ?? null,
+          customer: dto.customer.trim(),
+          customerEmail: this.asNullable(dto.customerEmail),
+          customerPhones: this.normalizeStringList(dto.customerPhones),
+          deadline: dto.deadline ?? null,
+          description: dto.description.trim(),
+          durationMinutes: this.normalizeDurationMinutes(dto.durationMinutes),
+          identifier: this.asNullable(dto.identifier),
+          osType: dto.osType,
+          scheduleAt,
+          scheduleTimeText: this.asNullable(dto.scheduleTime),
+          status: assignedTo
+            ? ServiceOrderStatus.IN_PROGRESS
+            : ServiceOrderStatus.OPEN,
+        },
+      });
+    } catch (error) {
+      this.handlePrismaWriteError(error);
+    }
 
     return this.decorateServiceOrder(createdOrder);
   }
@@ -132,7 +139,14 @@ export class ServiceOrdersService {
       return this.decorateServiceOrder(updatedOrder);
     }
 
-    const updatedOrder = await this.updateAsAdmin(existing, dto);
+    let updatedOrder: ServiceOrderModel;
+
+    try {
+      updatedOrder = await this.updateAsAdmin(existing, dto);
+    } catch (error) {
+      this.handlePrismaWriteError(error);
+    }
+
     return this.decorateServiceOrder(updatedOrder);
   }
 
@@ -165,7 +179,11 @@ export class ServiceOrdersService {
       );
     }
 
-    this.locationsService.updateLocation(actor, dto.lat, dto.lng);
+    await this.locationsService.ensureWithinCustomerRange(
+      existing.address ?? null,
+      dto.lat,
+      dto.lng,
+    );
 
     const updatedOrder = await this.prisma.serviceOrder.update({
       where: { id: existing.id },
@@ -173,8 +191,18 @@ export class ServiceOrdersService {
         assignedToEmail: actor.email ?? null,
         assignedToId: actor.id,
         assignedToName: actor.name ?? null,
+        locationCapturedAt: new Date(),
+        locationLat: dto.lat,
+        locationLng: dto.lng,
         status: ServiceOrderStatus.IN_PROGRESS,
       },
+    });
+
+    await this.locationsService.updateLocation(actor, dto.lat, dto.lng, {
+      address: updatedOrder.address ?? null,
+      customer: updatedOrder.customer,
+      id: updatedOrder.id,
+      identifier: updatedOrder.identifier ?? null,
     });
 
     try {
@@ -642,5 +670,36 @@ export class ServiceOrdersService {
     const month = `${date.getMonth() + 1}`.padStart(2, '0');
     const day = `${date.getDate()}`.padStart(2, '0');
     return `${year}-${month}-${day}`;
+  }
+
+  private handlePrismaWriteError(error: unknown): never {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    ) {
+      const meta = error.meta as
+        | {
+            driverAdapterError?: {
+              constraint?: {
+                fields?: string[];
+              };
+            };
+            target?: string[];
+          }
+        | undefined;
+      const fields = Array.isArray(meta?.target)
+        ? meta.target
+        : Array.isArray(meta?.driverAdapterError?.constraint?.fields)
+          ? meta.driverAdapterError.constraint.fields
+          : [];
+
+      if (fields.includes('identifier')) {
+        throw new ConflictException(
+          'Ja existe uma ordem de servico com esse identificador. Informe outro identificador ou deixe o campo em branco.',
+        );
+      }
+    }
+
+    throw error;
   }
 }

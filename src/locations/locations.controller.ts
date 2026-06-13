@@ -16,13 +16,13 @@ export class LocationsController {
 
   @Get()
   @Roles('ADMIN')
-  findAll() {
+  async findAll() {
     return this.locationsService.findAll();
   }
 
   @Post()
-  @Roles('SUPERVISOR', 'TECH')
-  updateLocation(
+  @Roles('ADMIN', 'SUPERVISOR', 'TECH')
+  async updateLocation(
     @Body() dto: UpdateLocationDto,
     @CurrentUser() user: CurrentUserPayload,
   ) {

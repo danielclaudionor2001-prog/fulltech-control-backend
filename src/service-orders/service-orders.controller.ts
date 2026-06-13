@@ -45,7 +45,7 @@ export class ServiceOrdersController {
   }
 
   @Post(':id/start')
-  @Roles('SUPERVISOR', 'TECH')
+  @Roles('ADMIN', 'SUPERVISOR', 'TECH')
   start(
     @Param('id') id: string,
     @Body() dto: StartServiceOrderDto,
