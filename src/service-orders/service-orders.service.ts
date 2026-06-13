@@ -8,9 +8,7 @@ import { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import {
   Prisma,
   ServiceOrder as ServiceOrderModel,
-  ServiceOrderDeadline,
   ServiceOrderStatus,
-  ServiceOrderType,
   UserRole,
 } from '../generated/prisma';
 import { LocationsService } from '../locations/locations.service';
@@ -107,7 +105,9 @@ export class ServiceOrdersService {
         osType: dto.osType,
         scheduleAt,
         scheduleTimeText: this.asNullable(dto.scheduleTime),
-        status: assignedTo ? ServiceOrderStatus.IN_PROGRESS : ServiceOrderStatus.OPEN,
+        status: assignedTo
+          ? ServiceOrderStatus.IN_PROGRESS
+          : ServiceOrderStatus.OPEN,
       },
     });
 
