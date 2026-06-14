@@ -206,13 +206,16 @@ describe('ServiceOrdersService', () => {
       },
     );
 
-    expect(prisma.serviceOrder.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          identifier: '0013',
-        }),
-      }),
-    );
+    const createCalls = prisma.serviceOrder.create.mock.calls as Array<
+      [
+        {
+          data: {
+            identifier: string;
+          };
+        },
+      ]
+    >;
+    expect(createCalls[0][0].data.identifier).toBe('0013');
   });
 
   it('blocks technicians from finishing service orders without customer signature', async () => {
