@@ -135,7 +135,7 @@ export class ClerkAuthGuard implements CanActivate {
     const existingUser = existingUserByClerkId ?? existingUserByEmail;
     const role = shouldBeAdmin
       ? UserRole.ADMIN
-      : (allowedEmailEntry?.role ?? existingUser?.role ?? UserRole.TECH);
+      : (existingUser?.role ?? allowedEmailEntry?.role ?? UserRole.TECH);
     const isActive = shouldBeAdmin || Boolean(allowedEmailEntry);
 
     if (

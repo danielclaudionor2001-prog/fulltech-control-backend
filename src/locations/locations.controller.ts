@@ -15,7 +15,7 @@ export class LocationsController {
   constructor(private readonly locationsService: LocationsService) {}
 
   @Get()
-  @Roles('ADMIN')
+  @Roles('ADMIN', 'SUPERVISOR')
   async findAll() {
     return this.locationsService.findAll();
   }

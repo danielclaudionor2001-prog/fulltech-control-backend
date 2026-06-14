@@ -31,7 +31,9 @@ export class CustomersService {
       where: { id },
       data: {
         ...(dto.address !== undefined ? { address: dto.address.trim() } : {}),
-        ...(dto.email !== undefined ? { email: this.asNullable(dto.email) } : {}),
+        ...(dto.email !== undefined
+          ? { email: this.asNullable(dto.email) }
+          : {}),
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
         ...(dto.phones !== undefined
           ? { phones: this.normalizePhones(dto.phones) }

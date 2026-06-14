@@ -10,10 +10,7 @@ export class RolesGuard implements CanActivate {
   canActivate(ctx: ExecutionContext): boolean {
     const roles = this.reflector.getAllAndOverride<
       Array<'ADMIN' | 'SUPERVISOR' | 'TECH'>
-    >(
-      ROLES_KEY,
-      [ctx.getHandler(), ctx.getClass()],
-    );
+    >(ROLES_KEY, [ctx.getHandler(), ctx.getClass()]);
 
     if (!roles || roles.length === 0) return true;
 

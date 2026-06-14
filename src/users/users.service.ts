@@ -62,33 +62,44 @@ export class UsersService {
   }
 
   async updateRole(id: string, role: UserRole) {
-    await this.ensureUserExists(id);
+    const existingUser = await this.ensureUserExists(id);
 
-    return this.prisma.user.update({
-      where: { id },
-      data: { role },
-      select: {
-        clerkUserId: true,
-        createdAt: true,
-        email: true,
-        id: true,
-        imageUrl: true,
-        isActive: true,
-        name: true,
-        role: true,
-        updatedAt: true,
-      },
+    return this.prisma.$transaction(async (tx) => {
+      if (existingUser.email) {
+        await tx.allowedEmail.updateMany({
+          where: { email: existingUser.email },
+          data: { role },
+        });
+      }
+
+      return tx.user.update({
+        where: { id },
+        data: { role },
+        select: {
+          clerkUserId: true,
+          createdAt: true,
+          email: true,
+          id: true,
+          imageUrl: true,
+          isActive: true,
+          name: true,
+          role: true,
+          updatedAt: true,
+        },
+      });
     });
   }
 
   private async ensureUserExists(id: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true },
+      select: { email: true, id: true },
     });
 
     if (!user) {
       throw new NotFoundException('User not found');
     }
+
+    return user;
   }
 }

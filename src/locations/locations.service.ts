@@ -5,7 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
-import { ServiceOrderStatus } from '../generated/prisma';
+import { ServiceOrderStatus, UserRole } from '../generated/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 
 type ResponsibleSnapshot = {
@@ -13,6 +13,7 @@ type ResponsibleSnapshot = {
   email: string | null;
   id: string;
   name: string | null;
+  role: UserRole | null;
 };
 
 type ServiceOrderSnapshot = {
@@ -66,6 +67,7 @@ export class LocationsService {
         email: user.email ?? null,
         id: user.id,
         name: user.name ?? null,
+        role: user.role as UserRole,
       },
       responsibleAddress,
       serviceOrder: activeServiceOrder,
@@ -114,6 +116,33 @@ export class LocationsService {
         locationLng: true,
       },
     });
+    const persistedAssignedUserIds = Array.from(
+      new Set(
+        persistedOrders
+          .map((order) => order.assignedToId)
+          .filter((userId): userId is string => Boolean(userId)),
+      ),
+    );
+    const persistedUsers =
+      persistedAssignedUserIds.length > 0
+        ? await this.prisma.user.findMany({
+            where: {
+              id: {
+                in: persistedAssignedUserIds,
+              },
+            },
+            select: {
+              clerkUserId: true,
+              email: true,
+              id: true,
+              name: true,
+              role: true,
+            },
+          })
+        : [];
+    const persistedUsersById = new Map(
+      persistedUsers.map((user) => [user.id, user]),
+    );
 
     for (const order of persistedOrders) {
       if (
@@ -128,6 +157,7 @@ export class LocationsService {
       const existing = mergedLocations.get(order.assignedToId);
       const timestamp = order.locationCapturedAt.toISOString();
       const serviceOrder = this.toServiceOrderSnapshot(order);
+      const persistedUser = persistedUsersById.get(order.assignedToId);
 
       if (existing && existing.timestamp >= timestamp) {
         if (!existing.serviceOrder) {
@@ -144,10 +174,11 @@ export class LocationsService {
         lat: order.locationLat,
         lng: order.locationLng,
         responsible: {
-          clerkUserId: null,
-          email: order.assignedToEmail ?? null,
+          clerkUserId: persistedUser?.clerkUserId ?? null,
+          email: persistedUser?.email ?? order.assignedToEmail ?? null,
           id: order.assignedToId,
-          name: order.assignedToName ?? null,
+          name: persistedUser?.name ?? order.assignedToName ?? null,
+          role: persistedUser?.role ?? null,
         },
         responsibleAddress: null,
         serviceOrder,
@@ -164,9 +195,9 @@ export class LocationsService {
       })),
     );
 
-    return resolvedLocations.sort((left, right) =>
-      right.timestamp.localeCompare(left.timestamp),
-    );
+    return resolvedLocations
+      .filter((location) => location.responsible.role !== UserRole.ADMIN)
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp));
   }
 
   async ensureWithinCustomerRange(
@@ -351,8 +382,10 @@ export class LocationsService {
       address.footway ??
       address.path;
     const number = address.house_number;
-    const district = address.suburb ?? address.neighbourhood ?? address.city_district;
-    const city = address.city ?? address.town ?? address.village ?? address.municipality;
+    const district =
+      address.suburb ?? address.neighbourhood ?? address.city_district;
+    const city =
+      address.city ?? address.town ?? address.village ?? address.municipality;
 
     const primary = [street, number].filter(Boolean).join(', ');
     const secondary = [district, city].filter(Boolean).join(' - ');

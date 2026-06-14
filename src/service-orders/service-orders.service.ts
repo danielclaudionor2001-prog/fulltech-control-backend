@@ -109,9 +109,7 @@ export class ServiceOrdersService {
           osType: dto.osType,
           scheduleAt,
           scheduleTimeText: this.asNullable(dto.scheduleTime),
-          status: assignedTo
-            ? ServiceOrderStatus.IN_PROGRESS
-            : ServiceOrderStatus.OPEN,
+          status: ServiceOrderStatus.OPEN,
         },
       });
     } catch (error) {
@@ -358,10 +356,6 @@ export class ServiceOrdersService {
       data.assignedToName = assignedTo?.name ?? null;
 
       if (dto.status === undefined) {
-        if (assignedTo && existing.status === ServiceOrderStatus.OPEN) {
-          data.status = ServiceOrderStatus.IN_PROGRESS;
-        }
-
         if (!assignedTo && existing.status === ServiceOrderStatus.IN_PROGRESS) {
           data.status = ServiceOrderStatus.OPEN;
         }
