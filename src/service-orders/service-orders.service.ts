@@ -33,6 +33,8 @@ type ServiceOrderResponse = ServiceOrderModel & {
   createdBy: ServiceOrderActor | null;
 };
 
+const MAX_IDENTIFIER_CREATE_ATTEMPTS = 5;
+
 @Injectable()
 export class ServiceOrdersService {
   constructor(
@@ -87,33 +89,57 @@ export class ServiceOrdersService {
       this.asNullable(dto.assignedToId),
     );
 
-    let createdOrder: ServiceOrderModel;
+    let createdOrder: ServiceOrderModel | null = null;
 
-    try {
-      createdOrder = await this.prisma.serviceOrder.create({
-        data: {
-          address: this.asNullable(dto.address),
-          assignedToEmail: assignedTo?.email ?? null,
-          assignedToId: assignedTo?.id ?? null,
-          assignedToName: assignedTo?.name ?? null,
-          createdByEmail: actor.email ?? null,
-          createdById: actor.id,
-          createdByName: actor.name ?? null,
-          customer: dto.customer.trim(),
-          customerEmail: this.asNullable(dto.customerEmail),
-          customerPhones: this.normalizeStringList(dto.customerPhones),
-          deadline: dto.deadline ?? null,
-          description: dto.description.trim(),
-          durationMinutes: this.normalizeDurationMinutes(dto.durationMinutes),
-          identifier: this.asNullable(dto.identifier),
-          osType: dto.osType,
-          scheduleAt,
-          scheduleTimeText: this.asNullable(dto.scheduleTime),
-          status: ServiceOrderStatus.OPEN,
-        },
-      });
-    } catch (error) {
-      this.handlePrismaWriteError(error);
+    const baseData = {
+      address: this.asNullable(dto.address),
+      assignedToEmail: assignedTo?.email ?? null,
+      assignedToId: assignedTo?.id ?? null,
+      assignedToName: assignedTo?.name ?? null,
+      createdByEmail: actor.email ?? null,
+      createdById: actor.id,
+      createdByName: actor.name ?? null,
+      customer: dto.customer.trim(),
+      customerEmail: this.asNullable(dto.customerEmail),
+      customerPhones: this.normalizeStringList(dto.customerPhones),
+      deadline: dto.deadline ?? null,
+      description: dto.description.trim(),
+      durationMinutes: this.normalizeDurationMinutes(dto.durationMinutes),
+      osType: dto.osType,
+      scheduleAt,
+      scheduleTimeText: this.asNullable(dto.scheduleTime),
+      status: ServiceOrderStatus.OPEN,
+    };
+
+    for (
+      let attempt = 0;
+      attempt < MAX_IDENTIFIER_CREATE_ATTEMPTS;
+      attempt += 1
+    ) {
+      try {
+        createdOrder = await this.prisma.serviceOrder.create({
+          data: {
+            ...baseData,
+            identifier: await this.generateNextIdentifier(),
+          },
+        });
+        break;
+      } catch (error) {
+        if (
+          attempt < MAX_IDENTIFIER_CREATE_ATTEMPTS - 1 &&
+          this.isIdentifierUniqueConflict(error)
+        ) {
+          continue;
+        }
+
+        this.handlePrismaWriteError(error);
+      }
+    }
+
+    if (!createdOrder) {
+      throw new ConflictException(
+        'Nao foi possivel gerar um identificador para esta ordem de servico. Tente novamente.',
+      );
     }
 
     return this.decorateServiceOrder(createdOrder);
@@ -654,6 +680,30 @@ export class ServiceOrdersService {
     return Number.isInteger(duration) && duration > 0 ? duration : 1;
   }
 
+  private async generateNextIdentifier() {
+    const existingIdentifiers = await this.prisma.serviceOrder.findMany({
+      where: {
+        identifier: {
+          not: null,
+        },
+      },
+      select: {
+        identifier: true,
+      },
+    });
+    const highestIdentifier = existingIdentifiers.reduce((highest, order) => {
+      const identifier = order.identifier?.trim();
+
+      if (!identifier || !/^\d+$/.test(identifier)) {
+        return highest;
+      }
+
+      return Math.max(highest, Number(identifier));
+    }, 0);
+
+    return String(highestIdentifier + 1).padStart(4, '0');
+  }
+
   private asNullable(value?: string | null) {
     const normalized = value?.trim();
     return normalized ? normalized : null;
@@ -667,6 +717,16 @@ export class ServiceOrdersService {
   }
 
   private handlePrismaWriteError(error: unknown): never {
+    if (this.isIdentifierUniqueConflict(error)) {
+      throw new ConflictException(
+        'Ja existe uma ordem de servico com esse identificador. Informe outro identificador ou deixe o campo em branco.',
+      );
+    }
+
+    throw error;
+  }
+
+  private isIdentifierUniqueConflict(error: unknown) {
     if (
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2002'
@@ -688,12 +748,10 @@ export class ServiceOrdersService {
           : [];
 
       if (fields.includes('identifier')) {
-        throw new ConflictException(
-          'Ja existe uma ordem de servico com esse identificador. Informe outro identificador ou deixe o campo em branco.',
-        );
+        return true;
       }
     }
 
-    throw error;
+    return false;
   }
 }

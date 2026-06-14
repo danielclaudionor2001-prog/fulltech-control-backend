@@ -66,9 +66,13 @@ export class UsersService {
 
     return this.prisma.$transaction(async (tx) => {
       if (existingUser.email) {
-        await tx.allowedEmail.updateMany({
+        await tx.allowedEmail.upsert({
           where: { email: existingUser.email },
-          data: { role },
+          update: { role },
+          create: {
+            email: existingUser.email,
+            role,
+          },
         });
       }
 

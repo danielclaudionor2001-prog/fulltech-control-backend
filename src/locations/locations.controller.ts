@@ -15,9 +15,9 @@ export class LocationsController {
   constructor(private readonly locationsService: LocationsService) {}
 
   @Get()
-  @Roles('ADMIN', 'SUPERVISOR')
-  async findAll() {
-    return this.locationsService.findAll();
+  @Roles('ADMIN', 'SUPERVISOR', 'TECH')
+  async findAll(@CurrentUser() user: CurrentUserPayload) {
+    return this.locationsService.findAll(user);
   }
 
   @Post()

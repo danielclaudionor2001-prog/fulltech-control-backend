@@ -88,7 +88,7 @@ export class LocationsService {
     return { success: true };
   }
 
-  async findAll() {
+  async findAll(actor?: CurrentUserPayload) {
     const mergedLocations = new Map<string, StoredLocation>();
 
     for (const [userId, location] of this.locations.entries()) {
@@ -197,6 +197,11 @@ export class LocationsService {
 
     return resolvedLocations
       .filter((location) => location.responsible.role !== UserRole.ADMIN)
+      .filter((location) =>
+        actor?.role === UserRole.TECH
+          ? location.responsible.id === actor.id
+          : true,
+      )
       .sort((left, right) => right.timestamp.localeCompare(left.timestamp));
   }
 

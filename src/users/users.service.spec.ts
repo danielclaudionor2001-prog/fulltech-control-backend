@@ -5,7 +5,7 @@ describe('UsersService', () => {
   const createService = () => {
     const tx = {
       allowedEmail: {
-        updateMany: jest.fn(),
+        upsert: jest.fn(),
       },
       user: {
         update: jest.fn(),
@@ -46,9 +46,13 @@ describe('UsersService', () => {
 
     await service.updateRole('local-tech', UserRole.SUPERVISOR);
 
-    expect(tx.allowedEmail.updateMany).toHaveBeenCalledWith({
+    expect(tx.allowedEmail.upsert).toHaveBeenCalledWith({
       where: { email: 'tech@example.com' },
-      data: { role: UserRole.SUPERVISOR },
+      update: { role: UserRole.SUPERVISOR },
+      create: {
+        email: 'tech@example.com',
+        role: UserRole.SUPERVISOR,
+      },
     });
     expect(tx.user.update).toHaveBeenCalledWith(
       expect.objectContaining({
