@@ -17,26 +17,29 @@ import { CustomersService } from './customers.service';
 
 @Controller('customers')
 @UseGuards(ClerkAuthGuard, RolesGuard)
-@Roles('ADMIN')
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
   @Get()
+  @Roles('ADMIN', 'SUPERVISOR')
   findAll() {
     return this.customersService.findAll();
   }
 
   @Post()
+  @Roles('ADMIN')
   create(@Body() dto: CreateCustomerDto) {
     return this.customersService.create(dto);
   }
 
   @Patch(':id')
+  @Roles('ADMIN')
   update(@Param('id') id: string, @Body() dto: UpdateCustomerDto) {
     return this.customersService.update(id, dto);
   }
 
   @Delete(':id')
+  @Roles('ADMIN')
   remove(@Param('id') id: string) {
     return this.customersService.remove(id);
   }

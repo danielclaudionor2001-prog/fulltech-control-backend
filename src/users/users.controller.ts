@@ -27,7 +27,7 @@ export class UsersController {
   }
 
   @Get('technicians')
-  @Roles('ADMIN')
+  @Roles('ADMIN', 'SUPERVISOR')
   findAssignableTechnicians() {
     return this.usersService.findAssignableTechnicians();
   }

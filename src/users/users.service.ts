@@ -36,7 +36,9 @@ export class UsersService {
         email: true,
         id: true,
         imageUrl: true,
+        isActive: true,
         name: true,
+        role: true,
       },
     });
   }

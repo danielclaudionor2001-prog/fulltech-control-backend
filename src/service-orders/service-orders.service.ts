@@ -47,18 +47,19 @@ export class ServiceOrdersService {
     actor: CurrentUserPayload,
     query: FindServiceOrdersQueryDto = {},
   ) {
-    const visibilityWhere: Prisma.ServiceOrderWhereInput =
-      actor.role === UserRole.ADMIN
-        ? {}
-        : {
-            OR: [
-              { assignedToId: actor.id },
-              {
-                assignedToId: null,
-                status: ServiceOrderStatus.OPEN,
-              },
-            ],
-          };
+    const isManager =
+      actor.role === UserRole.ADMIN || actor.role === UserRole.SUPERVISOR;
+    const visibilityWhere: Prisma.ServiceOrderWhereInput = isManager
+      ? {}
+      : {
+          OR: [
+            { assignedToId: actor.id },
+            {
+              assignedToId: null,
+              status: ServiceOrderStatus.OPEN,
+            },
+          ],
+        };
     const filterWhere = this.buildFindWhere(query);
     const where: Prisma.ServiceOrderWhereInput =
       Object.keys(filterWhere).length > 0
@@ -78,9 +79,9 @@ export class ServiceOrdersService {
   }
 
   async create(dto: CreateServiceOrderDto, actor: CurrentUserPayload) {
-    if (actor.role !== UserRole.ADMIN) {
+    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.SUPERVISOR) {
       throw new ForbiddenException(
-        'Only administrators can create service orders',
+        'Only administrators and supervisors can create service orders',
       );
     }
 
@@ -158,7 +159,7 @@ export class ServiceOrdersService {
       throw new NotFoundException('Service order not found');
     }
 
-    if (actor.role !== UserRole.ADMIN) {
+    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.SUPERVISOR) {
       const updatedOrder = await this.updateAsTechnician(existing, dto, actor);
       return this.decorateServiceOrder(updatedOrder);
     }

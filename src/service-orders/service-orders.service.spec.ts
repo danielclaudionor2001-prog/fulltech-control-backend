@@ -144,6 +144,79 @@ describe('ServiceOrdersService', () => {
     expect(createCalls[0][0].data.status).toBe(ServiceOrderStatus.OPEN);
   });
 
+  it('allows supervisors to create service orders', async () => {
+    const { prisma, service } = createService();
+
+    prisma.user.findUnique.mockResolvedValue(null);
+    prisma.serviceOrder.findMany.mockResolvedValue([]);
+    prisma.serviceOrder.create.mockResolvedValue({
+      address: null,
+      assignedToEmail: null,
+      assignedToId: null,
+      assignedToName: null,
+      collaborator: null,
+      completionDescription: null,
+      completionPhotos: [],
+      createdAt: new Date('2026-06-14T12:00:00.000Z'),
+      createdByEmail: 'supervisor@example.com',
+      createdById: 'local-supervisor',
+      createdByName: 'Supervisor Teste',
+      customer: 'Cliente supervisor',
+      customerEmail: null,
+      customerPhones: [],
+      customerSignature: null,
+      deadline: null,
+      defectAdjusted: null,
+      defectSolution: null,
+      description: 'Descricao supervisor',
+      durationMinutes: null,
+      equipmentStatus: null,
+      id: 'os-supervisor',
+      identifier: '0001',
+      locationCapturedAt: null,
+      locationLat: null,
+      locationLng: null,
+      osType: ServiceOrderType.manutencao,
+      scheduleAt: new Date('2026-06-14T00:00:00.000Z'),
+      scheduleTimeText: null,
+      status: ServiceOrderStatus.OPEN,
+      updatedAt: new Date('2026-06-14T12:00:00.000Z'),
+    });
+    prisma.user.findMany.mockResolvedValue([]);
+
+    await service.create(
+      {
+        customer: 'Cliente supervisor',
+        description: 'Descricao supervisor',
+        osType: ServiceOrderType.manutencao,
+        scheduleDate: '2026-06-14',
+      },
+      {
+        clerkUserId: 'clerk-supervisor',
+        email: 'supervisor@example.com',
+        id: 'local-supervisor',
+        isActive: true,
+        name: 'Supervisor Teste',
+        role: UserRole.SUPERVISOR,
+      },
+    );
+
+    const createCalls = prisma.serviceOrder.create.mock.calls as Array<
+      [
+        {
+          data: {
+            createdById: string;
+            identifier: string;
+            status: ServiceOrderStatus;
+          };
+        },
+      ]
+    >;
+    expect(createCalls[0][0].data.createdById).toBe('local-supervisor');
+    expect(createCalls[0][0].data.identifier).toBe('0001');
+    expect(createCalls[0][0].data.status).toBe(ServiceOrderStatus.OPEN);
+  });
+
   it('generates the next sequential service order identifier', async () => {
     const { prisma, service } = createService();
 
