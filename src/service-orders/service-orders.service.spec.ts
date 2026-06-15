@@ -11,6 +11,7 @@ describe('ServiceOrdersService', () => {
     const prisma = {
       serviceOrder: {
         create: jest.fn(),
+        delete: jest.fn(),
         findMany: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
@@ -24,6 +25,8 @@ describe('ServiceOrdersService', () => {
       updateLocation: jest.fn(),
     };
     const whatsAppService = {
+      sendServiceOrderCreated: jest.fn(),
+      sendServiceOrderFinished: jest.fn(),
       sendServiceOrderStarted: jest.fn(),
     };
 
@@ -33,7 +36,7 @@ describe('ServiceOrdersService', () => {
       whatsAppService as never,
     );
 
-    return { prisma, service };
+    return { prisma, service, whatsAppService };
   };
 
   it('blocks technicians from creating service orders', async () => {
@@ -62,7 +65,7 @@ describe('ServiceOrdersService', () => {
   });
 
   it('keeps service orders open when administrators assign a technician during creation', async () => {
-    const { prisma, service } = createService();
+    const { prisma, service, whatsAppService } = createService();
 
     prisma.user.findUnique.mockResolvedValue({
       clerkUserId: 'clerk-tech',
@@ -142,10 +145,23 @@ describe('ServiceOrdersService', () => {
     expect(createCalls[0][0].data.assignedToId).toBe('local-tech');
     expect(createCalls[0][0].data.identifier).toBe('0001');
     expect(createCalls[0][0].data.status).toBe(ServiceOrderStatus.OPEN);
+    const notificationCalls = whatsAppService.sendServiceOrderCreated.mock
+      .calls as Array<
+      [
+        {
+          customer: string;
+          identifier: string | null;
+          responsibleName?: string | null;
+        },
+      ]
+    >;
+    expect(notificationCalls[0][0].customer).toBe('Cliente teste');
+    expect(notificationCalls[0][0].identifier).toBe('0001');
+    expect(notificationCalls[0][0].responsibleName).toBe('Tecnico Teste');
   });
 
   it('allows supervisors to create service orders', async () => {
-    const { prisma, service } = createService();
+    const { prisma, service, whatsAppService } = createService();
 
     prisma.user.findUnique.mockResolvedValue(null);
     prisma.serviceOrder.findMany.mockResolvedValue([]);
@@ -215,6 +231,7 @@ describe('ServiceOrdersService', () => {
     expect(createCalls[0][0].data.createdById).toBe('local-supervisor');
     expect(createCalls[0][0].data.identifier).toBe('0001');
     expect(createCalls[0][0].data.status).toBe(ServiceOrderStatus.OPEN);
+    expect(whatsAppService.sendServiceOrderCreated).toHaveBeenCalledTimes(1);
   });
 
   it('generates the next sequential service order identifier', async () => {
@@ -291,6 +308,90 @@ describe('ServiceOrdersService', () => {
     expect(createCalls[0][0].data.identifier).toBe('0013');
   });
 
+  it('sends WhatsApp notification when a technician finishes a service order', async () => {
+    const { prisma, service, whatsAppService } = createService();
+
+    prisma.serviceOrder.findUnique.mockResolvedValue({
+      assignedToId: 'local-tech',
+      id: 'os-1',
+      status: ServiceOrderStatus.IN_PROGRESS,
+    });
+    prisma.serviceOrder.update.mockResolvedValue({
+      address: 'Rua final, 456',
+      assignedToEmail: 'tech@example.com',
+      assignedToId: 'local-tech',
+      assignedToName: 'Tecnico Teste',
+      collaborator: null,
+      completionDescription: 'Atendimento concluido',
+      completionPhotos: [],
+      createdAt: new Date('2026-06-15T12:00:00.000Z'),
+      createdByEmail: 'admin@example.com',
+      createdById: 'local-admin',
+      createdByName: 'Admin Teste',
+      customer: 'Cliente final',
+      customerEmail: 'cliente@example.com',
+      customerPhones: ['11999999999'],
+      customerSignature: 'data:image/png;base64,assinatura',
+      deadline: null,
+      defectAdjusted: true,
+      defectSolution: 'adjustment',
+      description: 'Descricao final',
+      durationMinutes: null,
+      equipmentStatus: 'running',
+      id: 'os-1',
+      identifier: '0020',
+      locationCapturedAt: null,
+      locationLat: null,
+      locationLng: null,
+      osType: ServiceOrderType.manutencao,
+      scheduleAt: new Date('2026-06-15T12:00:00.000Z'),
+      scheduleTimeText: null,
+      status: ServiceOrderStatus.DONE,
+      updatedAt: new Date('2026-06-15T13:00:00.000Z'),
+    });
+    prisma.user.findMany.mockResolvedValue([]);
+
+    await service.update(
+      'os-1',
+      {
+        completionDescription: 'Atendimento concluido',
+        customerSignature: 'data:image/png;base64,assinatura',
+        defectAdjusted: true,
+        defectSolution: 'adjustment',
+        equipmentStatus: 'running',
+        status: ServiceOrderStatus.DONE,
+      },
+      {
+        clerkUserId: 'clerk-tech',
+        email: 'tech@example.com',
+        id: 'local-tech',
+        isActive: true,
+        name: 'Tecnico Teste',
+        role: UserRole.TECH,
+      },
+    );
+
+    const notificationCalls = whatsAppService.sendServiceOrderFinished.mock
+      .calls as Array<
+      [
+        {
+          completionDescription?: string | null;
+          customer: string;
+          identifier: string | null;
+          responsibleName?: string | null;
+          status?: string | null;
+        },
+      ]
+    >;
+    expect(notificationCalls[0][0].customer).toBe('Cliente final');
+    expect(notificationCalls[0][0].identifier).toBe('0020');
+    expect(notificationCalls[0][0].responsibleName).toBe('Tecnico Teste');
+    expect(notificationCalls[0][0].completionDescription).toBe(
+      'Atendimento concluido',
+    );
+    expect(notificationCalls[0][0].status).toBe(ServiceOrderStatus.DONE);
+  });
+
   it('blocks technicians from finishing service orders without customer signature', async () => {
     const { prisma, service } = createService();
 
@@ -354,5 +455,55 @@ describe('ServiceOrdersService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(prisma.serviceOrder.update).not.toHaveBeenCalled();
+  });
+
+  it('allows supervisors to delete pending service orders', async () => {
+    const { prisma, service } = createService();
+
+    prisma.serviceOrder.findUnique.mockResolvedValue({
+      id: 'os-1',
+      status: ServiceOrderStatus.OPEN,
+    });
+    prisma.serviceOrder.delete.mockResolvedValue({
+      id: 'os-1',
+      status: ServiceOrderStatus.OPEN,
+    });
+
+    await expect(
+      service.remove('os-1', {
+        clerkUserId: 'clerk-supervisor',
+        email: 'supervisor@example.com',
+        id: 'local-supervisor',
+        isActive: true,
+        name: 'Supervisor Teste',
+        role: UserRole.SUPERVISOR,
+      }),
+    ).resolves.toEqual({ success: true });
+
+    expect(prisma.serviceOrder.delete).toHaveBeenCalledWith({
+      where: { id: 'os-1' },
+    });
+  });
+
+  it('blocks deletion when service order is already finalized', async () => {
+    const { prisma, service } = createService();
+
+    prisma.serviceOrder.findUnique.mockResolvedValue({
+      id: 'os-1',
+      status: ServiceOrderStatus.DONE,
+    });
+
+    await expect(
+      service.remove('os-1', {
+        clerkUserId: 'clerk-admin',
+        email: 'admin@example.com',
+        id: 'local-admin',
+        isActive: true,
+        name: 'Admin Teste',
+        role: UserRole.ADMIN,
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(prisma.serviceOrder.delete).not.toHaveBeenCalled();
   });
 });

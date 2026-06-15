@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -37,6 +38,8 @@ const MAX_IDENTIFIER_CREATE_ATTEMPTS = 5;
 
 @Injectable()
 export class ServiceOrdersService {
+  private readonly logger = new Logger(ServiceOrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly locationsService: LocationsService,
@@ -143,6 +146,8 @@ export class ServiceOrdersService {
       );
     }
 
+    await this.notifyServiceOrderCreated(createdOrder);
+
     return this.decorateServiceOrder(createdOrder);
   }
 
@@ -159,20 +164,49 @@ export class ServiceOrdersService {
       throw new NotFoundException('Service order not found');
     }
 
-    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.SUPERVISOR) {
-      const updatedOrder = await this.updateAsTechnician(existing, dto, actor);
-      return this.decorateServiceOrder(updatedOrder);
-    }
-
     let updatedOrder: ServiceOrderModel;
 
-    try {
-      updatedOrder = await this.updateAsAdmin(existing, dto);
-    } catch (error) {
-      this.handlePrismaWriteError(error);
+    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.SUPERVISOR) {
+      updatedOrder = await this.updateAsTechnician(existing, dto, actor);
+    } else {
+      try {
+        updatedOrder = await this.updateAsAdmin(existing, dto);
+      } catch (error) {
+        this.handlePrismaWriteError(error);
+      }
     }
 
+    await this.notifyServiceOrderFinished(existing.status, updatedOrder);
+
     return this.decorateServiceOrder(updatedOrder);
+  }
+
+  async remove(id: string, actor: CurrentUserPayload) {
+    if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.SUPERVISOR) {
+      throw new ForbiddenException(
+        'Only administrators and supervisors can delete service orders',
+      );
+    }
+
+    const existing = await this.prisma.serviceOrder.findUnique({
+      where: { id },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Service order not found');
+    }
+
+    if (existing.status !== ServiceOrderStatus.OPEN) {
+      throw new ForbiddenException(
+        'Only pending service orders can be deleted',
+      );
+    }
+
+    await this.prisma.serviceOrder.delete({
+      where: { id },
+    });
+
+    return { success: true };
   }
 
   async start(
@@ -240,11 +274,79 @@ export class ServiceOrdersService {
         serviceOrderId: updatedOrder.id,
         technicianName: actor.name ?? actor.email ?? null,
       });
-    } catch {
+    } catch (error) {
       // The service order should still start even if the notification provider fails.
+      this.logWhatsAppFailure('start', updatedOrder.id, error);
     }
 
     return this.decorateServiceOrder(updatedOrder);
+  }
+
+  private async notifyServiceOrderCreated(order: ServiceOrderModel) {
+    try {
+      await this.whatsAppService.sendServiceOrderCreated(
+        this.toWhatsAppNotification(order),
+      );
+    } catch (error) {
+      // The service order should still be created if WhatsApp delivery fails.
+      this.logWhatsAppFailure('creation', order.id, error);
+    }
+  }
+
+  private async notifyServiceOrderFinished(
+    previousStatus: ServiceOrderStatus,
+    order: ServiceOrderModel,
+  ) {
+    if (
+      this.isFinalStatus(previousStatus) ||
+      !this.isFinalStatus(order.status)
+    ) {
+      return;
+    }
+
+    try {
+      await this.whatsAppService.sendServiceOrderFinished(
+        this.toWhatsAppNotification(order),
+      );
+    } catch (error) {
+      // The service order should still finish if WhatsApp delivery fails.
+      this.logWhatsAppFailure('finish', order.id, error);
+    }
+  }
+
+  private toWhatsAppNotification(order: ServiceOrderModel) {
+    return {
+      address: order.address,
+      completionDescription: order.completionDescription,
+      createdByName: order.createdByName ?? order.createdByEmail,
+      customer: order.customer,
+      customerEmail: order.customerEmail,
+      customerPhones: order.customerPhones,
+      defectAdjusted: order.defectAdjusted,
+      defectSolution: order.defectSolution,
+      description: order.description,
+      equipmentStatus: order.equipmentStatus,
+      identifier: order.identifier,
+      osType: order.osType,
+      responsibleName: order.assignedToName ?? order.assignedToEmail,
+      scheduleAt: order.scheduleAt,
+      serviceOrderId: order.id,
+      status: order.status,
+    };
+  }
+
+  private logWhatsAppFailure(
+    action: 'creation' | 'finish' | 'start',
+    serviceOrderId: string,
+    error: unknown,
+  ) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
+
+    this.logger.error(
+      `WhatsApp notification failed during ${action} for OS ${serviceOrderId}: ${message}`,
+      stack,
+    );
   }
 
   private async decorateServiceOrders(
@@ -579,15 +681,18 @@ export class ServiceOrdersService {
     status: ServiceOrderStatus,
     data: { customerSignature?: string | null },
   ) {
-    const isFinalStatus =
-      status === ServiceOrderStatus.DONE ||
-      status === ServiceOrderStatus.WITH_PENDING;
-
-    if (isFinalStatus && !data.customerSignature) {
+    if (this.isFinalStatus(status) && !data.customerSignature) {
       throw new BadRequestException(
         'Customer signature is required to finish the service order',
       );
     }
+  }
+
+  private isFinalStatus(status: ServiceOrderStatus) {
+    return (
+      status === ServiceOrderStatus.DONE ||
+      status === ServiceOrderStatus.WITH_PENDING
+    );
   }
 
   private validateTechnicianConclusion(dto: UpdateServiceOrderDto) {

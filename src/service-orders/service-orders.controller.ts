@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -62,5 +63,11 @@ export class ServiceOrdersController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.serviceOrdersService.update(id, dto, user);
+  }
+
+  @Delete(':id')
+  @Roles('ADMIN', 'SUPERVISOR')
+  remove(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.serviceOrdersService.remove(id, user);
   }
 }
