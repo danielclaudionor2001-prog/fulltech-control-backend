@@ -5,7 +5,11 @@ import {
   Logger,
 } from '@nestjs/common';
 import { CurrentUserPayload } from '../auth/decorators/current-user.decorator';
-import { ServiceOrderStatus, UserRole } from '../generated/prisma';
+import {
+  LocationSignalStatus,
+  ServiceOrderStatus,
+  UserRole,
+} from '../generated/prisma';
 import { PrismaService } from '../prisma/prisma.service';
 
 type ResponsibleSnapshot = {
@@ -26,6 +30,8 @@ type ServiceOrderSnapshot = {
 type StoredLocation = {
   lat: number;
   lng: number;
+  locationStatus: LocationSignalStatus;
+  locationStatusChangedAt: string;
   responsible: ResponsibleSnapshot;
   responsibleAddress: string | null;
   serviceOrder: ServiceOrderSnapshot | null;
@@ -38,6 +44,7 @@ type Coordinates = {
 };
 
 const MAX_START_DISTANCE_METERS = 1000;
+const LOCATION_STALE_MS = 3 * 60 * 1000;
 
 @Injectable()
 export class LocationsService {
@@ -56,12 +63,15 @@ export class LocationsService {
   ) {
     const activeServiceOrder =
       explicitServiceOrder ?? (await this.findActiveServiceOrder(user.id));
-    const timestamp = new Date().toISOString();
+    const capturedAt = new Date();
+    const timestamp = capturedAt.toISOString();
     const responsibleAddress = await this.resolveResponsibleAddress(lat, lng);
 
     this.locations.set(user.id, {
       lat,
       lng,
+      locationStatus: LocationSignalStatus.ACTIVE,
+      locationStatusChangedAt: timestamp,
       responsible: {
         clerkUserId: user.clerkUserId,
         email: user.email ?? null,
@@ -74,11 +84,23 @@ export class LocationsService {
       timestamp,
     });
 
+    await this.prisma.user.updateMany({
+      where: { id: user.id },
+      data: {
+        lastLocationAddress: responsibleAddress,
+        lastLocationAt: capturedAt,
+        lastLocationLat: lat,
+        lastLocationLng: lng,
+        locationStatus: LocationSignalStatus.ACTIVE,
+        locationStatusChangedAt: capturedAt,
+      },
+    });
+
     if (activeServiceOrder?.id) {
       await this.prisma.serviceOrder.updateMany({
         where: { id: activeServiceOrder.id },
         data: {
-          locationCapturedAt: new Date(timestamp),
+          locationCapturedAt: capturedAt,
           locationLat: lat,
           locationLng: lng,
         },
@@ -86,6 +108,163 @@ export class LocationsService {
     }
 
     return { success: true };
+  }
+
+  async updateLocationStatus(
+    user: CurrentUserPayload,
+    status: LocationSignalStatus,
+  ) {
+    const changedAt = new Date();
+    const changedAtIso = changedAt.toISOString();
+    const existingLocation = this.locations.get(user.id);
+
+    if (existingLocation) {
+      this.locations.set(user.id, {
+        ...existingLocation,
+        locationStatus: status,
+        locationStatusChangedAt: changedAtIso,
+      });
+    }
+
+    await this.prisma.user.updateMany({
+      where: { id: user.id },
+      data: {
+        locationStatus: status,
+        locationStatusChangedAt: changedAt,
+      },
+    });
+
+    return {
+      changedAt: changedAtIso,
+      status,
+      success: true,
+    };
+  }
+
+  async findStatuses(actor?: CurrentUserPayload) {
+    const users = await this.prisma.user.findMany({
+      where: {
+        role: {
+          in: [UserRole.SUPERVISOR, UserRole.TECH],
+        },
+      },
+      orderBy: [{ role: 'asc' }, { name: 'asc' }, { email: 'asc' }],
+      select: {
+        clerkUserId: true,
+        email: true,
+        id: true,
+        imageUrl: true,
+        lastLocationAddress: true,
+        lastLocationAt: true,
+        lastLocationLat: true,
+        lastLocationLng: true,
+        locationStatus: true,
+        locationStatusChangedAt: true,
+        name: true,
+        role: true,
+      },
+    });
+    const visibleUsers =
+      actor?.role === UserRole.TECH
+        ? users.filter((user) => user.id === actor.id)
+        : users;
+    const visibleUserIds = visibleUsers.map((user) => user.id);
+    const activeOrders =
+      visibleUserIds.length > 0
+        ? await this.prisma.serviceOrder.findMany({
+            where: {
+              assignedToId: { in: visibleUserIds },
+              status: ServiceOrderStatus.IN_PROGRESS,
+            },
+            orderBy: [{ updatedAt: 'desc' }, { createdAt: 'desc' }],
+            select: {
+              address: true,
+              assignedToId: true,
+              customer: true,
+              id: true,
+              identifier: true,
+            },
+          })
+        : [];
+    const activeOrderByUserId = new Map<string, ServiceOrderSnapshot>();
+
+    for (const order of activeOrders) {
+      if (!order.assignedToId || activeOrderByUserId.has(order.assignedToId)) {
+        continue;
+      }
+
+      activeOrderByUserId.set(
+        order.assignedToId,
+        this.toServiceOrderSnapshot(order),
+      );
+    }
+
+    const now = Date.now();
+
+    return visibleUsers.map((user) => {
+      const liveLocation = this.locations.get(user.id);
+      const liveTimestamp = liveLocation
+        ? new Date(liveLocation.timestamp).getTime()
+        : 0;
+      const persistedTimestamp = user.lastLocationAt?.getTime() ?? 0;
+      const shouldUseLiveLocation =
+        Boolean(liveLocation) && liveTimestamp >= persistedTimestamp;
+      const lastLocationAt = shouldUseLiveLocation
+        ? liveLocation?.timestamp
+        : user.lastLocationAt?.toISOString() ?? null;
+      const locationStatusChangedAt = shouldUseLiveLocation
+        ? liveLocation?.locationStatusChangedAt
+        : user.locationStatusChangedAt?.toISOString() ?? null;
+      const latestTimestamp = lastLocationAt
+        ? new Date(lastLocationAt).getTime()
+        : 0;
+      const isStale =
+        latestTimestamp > 0 && now - latestTimestamp > LOCATION_STALE_MS;
+      const savedStatus = shouldUseLiveLocation
+        ? liveLocation?.locationStatus
+        : user.locationStatus;
+      const status =
+        savedStatus === LocationSignalStatus.ACTIVE && isStale
+          ? 'STALE'
+          : savedStatus || LocationSignalStatus.UNKNOWN;
+      const staleSince =
+        status === 'STALE'
+          ? new Date(latestTimestamp + LOCATION_STALE_MS).toISOString()
+          : null;
+
+      return {
+        disabledAt:
+          status === LocationSignalStatus.DISABLED
+            ? locationStatusChangedAt
+            : null,
+        isOnline: status === LocationSignalStatus.ACTIVE,
+        lastLocationAddress: shouldUseLiveLocation
+          ? liveLocation?.responsibleAddress ?? null
+          : user.lastLocationAddress,
+        lastLocationAt,
+        lastLocationLat: shouldUseLiveLocation
+          ? liveLocation?.lat ?? null
+          : user.lastLocationLat,
+        lastLocationLng: shouldUseLiveLocation
+          ? liveLocation?.lng ?? null
+          : user.lastLocationLng,
+        locationStatusChangedAt,
+        serviceOrder:
+          (shouldUseLiveLocation ? liveLocation?.serviceOrder : null) ??
+          activeOrderByUserId.get(user.id) ??
+          null,
+        staleSince,
+        status,
+        user: {
+          clerkUserId: user.clerkUserId,
+          email: user.email,
+          id: user.id,
+          imageUrl: user.imageUrl,
+          name: user.name,
+          role: user.role,
+        },
+      };
+    });
   }
 
   async findAll(actor?: CurrentUserPayload) {
@@ -173,6 +352,8 @@ export class LocationsService {
       mergedLocations.set(order.assignedToId, {
         lat: order.locationLat,
         lng: order.locationLng,
+        locationStatus: LocationSignalStatus.ACTIVE,
+        locationStatusChangedAt: timestamp,
         responsible: {
           clerkUserId: persistedUser?.clerkUserId ?? null,
           email: persistedUser?.email ?? order.assignedToEmail ?? null,

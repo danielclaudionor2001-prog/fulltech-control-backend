@@ -40,6 +40,13 @@ enum ServiceOrderStatus {
   CANCELED
 }
 
+enum LocationSignalStatus {
+  UNKNOWN
+  ACTIVE
+  DISABLED
+  UNAVAILABLE
+}
+
 model User {
   id String @id @default(uuid())
 
@@ -56,10 +63,18 @@ model User {
 
   isActive Boolean @default(true)
 
+  locationStatus          LocationSignalStatus @default(UNKNOWN)
+  locationStatusChangedAt DateTime?
+  lastLocationAt          DateTime?
+  lastLocationLat         Float?
+  lastLocationLng         Float?
+  lastLocationAddress     String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([role, isActive])
+  @@index([locationStatus, lastLocationAt])
 }
 
 model AllowedEmail {

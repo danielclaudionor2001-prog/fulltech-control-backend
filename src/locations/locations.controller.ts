@@ -7,6 +7,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { ClerkAuthGuard } from '../auth/guards/auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UpdateLocationDto } from './dto/update-location.dto';
+import { UpdateLocationStatusDto } from './dto/update-location-status.dto';
 import { LocationsService } from './locations.service';
 
 @Controller('locations')
@@ -20,6 +21,12 @@ export class LocationsController {
     return this.locationsService.findAll(user);
   }
 
+  @Get('status')
+  @Roles('ADMIN', 'SUPERVISOR', 'TECH')
+  async findStatuses(@CurrentUser() user: CurrentUserPayload) {
+    return this.locationsService.findStatuses(user);
+  }
+
   @Post()
   @Roles('ADMIN', 'SUPERVISOR', 'TECH')
   async updateLocation(
@@ -27,5 +34,14 @@ export class LocationsController {
     @CurrentUser() user: CurrentUserPayload,
   ) {
     return this.locationsService.updateLocation(user, dto.lat, dto.lng);
+  }
+
+  @Post('status')
+  @Roles('ADMIN', 'SUPERVISOR', 'TECH')
+  async updateLocationStatus(
+    @Body() dto: UpdateLocationStatusDto,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.locationsService.updateLocationStatus(user, dto.status);
   }
 }
