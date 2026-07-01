@@ -41,11 +41,18 @@ export class ActivityLogsService {
   async findByUserId(userId: string, rawLimit?: string | number) {
     const limit = this.normalizeLimit(rawLimit);
 
-    return this.prisma.userActivityLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: limit,
-    });
+    try {
+      return await this.prisma.userActivityLog.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Failed to read activity logs for user ${userId}: ${String(error)}`,
+      );
+      return [];
+    }
   }
 
   async record(input: RecordActivityLogInput) {
