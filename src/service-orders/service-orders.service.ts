@@ -16,6 +16,7 @@ import {
 import { LocationsService } from '../locations/locations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { WhatsAppService } from '../whatsapp/whatsapp.service';
+import { ActivityLogsService } from '../activity-logs/activity-logs.service';
 import { CreateServiceOrderDto } from './dto/create-service-order.dto';
 import { FindServiceOrdersQueryDto } from './dto/find-service-orders-query.dto';
 import { StartServiceOrderDto } from './dto/start-service-order.dto';
@@ -44,6 +45,7 @@ export class ServiceOrdersService {
     private readonly prisma: PrismaService,
     private readonly locationsService: LocationsService,
     private readonly whatsAppService: WhatsAppService,
+    private readonly activityLogs: ActivityLogsService,
   ) {}
 
   async findAll(
@@ -238,11 +240,49 @@ export class ServiceOrdersService {
       );
     }
 
-    await this.locationsService.ensureWithinCustomerRange(
-      existing.address ?? null,
-      dto.lat,
-      dto.lng,
-    );
+    void this.activityLogs.record({
+      message: `Tentativa de iniciar OS ${existing.identifier ?? existing.id}.`,
+      metadata: {
+        address: existing.address,
+        customer: existing.customer,
+        serviceOrderId: existing.id,
+        serviceOrderIdentifier: existing.identifier,
+      },
+      type: 'service_order.start_attempt',
+      userId: actor.id,
+    });
+
+    let rangeValidation: Awaited<
+      ReturnType<LocationsService['ensureWithinCustomerRange']>
+    >;
+
+    try {
+      rangeValidation = await this.locationsService.ensureWithinCustomerRange(
+        existing.address ?? null,
+        dto.lat,
+        dto.lng,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Nao foi possivel iniciar a OS.';
+
+      void this.activityLogs.record({
+        message: `Falha ao iniciar OS ${existing.identifier ?? existing.id}: ${message}`,
+        metadata: {
+          address: existing.address,
+          customer: existing.customer,
+          serviceOrderId: existing.id,
+          serviceOrderIdentifier: existing.identifier,
+          technicianLat: Number(dto.lat.toFixed(6)),
+          technicianLng: Number(dto.lng.toFixed(6)),
+        },
+        type: 'service_order.start_failed',
+        userId: actor.id,
+      });
+      throw error;
+    }
 
     const updatedOrder = await this.prisma.serviceOrder.update({
       where: { id: existing.id },
@@ -262,6 +302,20 @@ export class ServiceOrdersService {
       customer: updatedOrder.customer,
       id: updatedOrder.id,
       identifier: updatedOrder.identifier ?? null,
+    });
+
+    void this.activityLogs.record({
+      message: `OS ${updatedOrder.identifier ?? updatedOrder.id} iniciada com sucesso.`,
+      metadata: {
+        customer: updatedOrder.customer,
+        distanceMeters: Math.round(rangeValidation.distance),
+        geocodeDisplayName: rangeValidation.customerCoordinates.displayName,
+        geocodeQuery: rangeValidation.customerCoordinates.query,
+        serviceOrderId: updatedOrder.id,
+        serviceOrderIdentifier: updatedOrder.identifier,
+      },
+      type: 'service_order.started',
+      userId: actor.id,
     });
 
     try {

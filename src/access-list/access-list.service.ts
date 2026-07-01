@@ -86,11 +86,37 @@ export class AccessListService {
     const allowedEmails = await this.prisma.allowedEmail.findMany({
       orderBy: [{ role: 'asc' }, { email: 'asc' }],
     });
+    const emails = allowedEmails.map((allowedEmail) => allowedEmail.email);
+    const users =
+      emails.length > 0
+        ? await this.prisma.user.findMany({
+            where: {
+              email: {
+                in: emails,
+              },
+            },
+            select: {
+              clerkUserId: true,
+              email: true,
+              id: true,
+              imageUrl: true,
+              isActive: true,
+              name: true,
+              role: true,
+            },
+          })
+        : [];
+    const usersByEmail = new Map(
+      users
+        .filter((user) => user.email)
+        .map((user) => [user.email?.toLowerCase(), user]),
+    );
 
     return allowedEmails.map((allowedEmail) => ({
       ...allowedEmail,
       isProtected:
         Boolean(firstAdminEmail) && allowedEmail.email === firstAdminEmail,
+      user: usersByEmail.get(allowedEmail.email.toLowerCase()) ?? null,
     }));
   }
 

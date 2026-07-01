@@ -51,7 +51,7 @@ model User {
   id String @id @default(uuid())
 
   // ID do usuário no Clerk (ex: user_2abc123...)
-  clerkUserId String @unique
+  clerkUserId String  @unique
   email       String? @unique
 
   // Perfil interno da aplicação (autorização)
@@ -77,9 +77,25 @@ model User {
   @@index([locationStatus, lastLocationAt])
 }
 
+model UserActivityLog {
+  id String @id @default(uuid())
+
+  userId  String
+  actorId String?
+
+  type     String
+  message  String
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+}
+
 model AllowedEmail {
-  id    String @id @default(uuid())
-  email String @unique
+  id    String   @id @default(uuid())
+  email String   @unique
   role  UserRole @default(TECH)
 
   createdAt DateTime @default(now())
@@ -89,7 +105,7 @@ model AllowedEmail {
 }
 
 model Customer {
-  id      String @id @default(uuid())
+  id      String   @id @default(uuid())
   name    String
   address String
   email   String?
@@ -111,7 +127,7 @@ model ServiceOrder {
   deadline        ServiceOrderDeadline?
   customer        String
   customerEmail   String?
-  customerPhones  String[] @default([])
+  customerPhones  String[]              @default([])
   description     String
   durationMinutes Int?
 

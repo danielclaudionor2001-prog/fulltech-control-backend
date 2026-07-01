@@ -31,6 +31,23 @@ type StartedServiceOrderNotification = {
   technicianName: string | null;
 };
 
+type WhatsAppConfig = {
+  accountSid: string;
+  authToken: string;
+  from: string;
+  to: string;
+};
+
+type WhatsAppConfigResult =
+  | {
+      config: WhatsAppConfig;
+      reason?: never;
+    }
+  | {
+      config?: never;
+      reason: string;
+    };
+
 const SERVICE_ORDER_TYPE_LABELS: Record<string, string> = {
   atendimento_chamado: 'Atendimento de chamado',
   instalacao: 'Instalacao',
@@ -60,20 +77,14 @@ const EQUIPMENT_STATUS_LABELS: Record<string, string> = {
   stopped: 'Elevador parado',
 };
 
+const TWILIO_ACCOUNT_SID_PATTERN = /^AC[a-f0-9]{32}$/i;
+const WHATSAPP_ADDRESS_PATTERN = /^whatsapp:\+\d+$/;
+
 @Injectable()
 export class WhatsAppService {
   private readonly logger = new Logger(WhatsAppService.name);
 
   constructor(private readonly config: ConfigService) {}
-
-  private get isConfigured() {
-    return Boolean(
-      this.config.get<string>('TWILIO_ACCOUNT_SID') &&
-      this.config.get<string>('TWILIO_AUTH_TOKEN') &&
-      this.config.get<string>('WHATSAPP_FROM') &&
-      this.config.get<string>('WHATSAPP_TO'),
-    );
-  }
 
   async sendServiceOrderCreated(
     payload: ServiceOrderNotification,
@@ -124,29 +135,72 @@ export class WhatsAppService {
   }
 
   private async sendMessage(eventName: string, lines: string[]) {
-    if (!this.isConfigured) {
+    const configResult = this.getWhatsAppConfig();
+
+    if (!configResult.config) {
       this.logger.warn(
-        `WhatsApp notification ${eventName} skipped because Twilio variables are not configured.`,
+        `WhatsApp notification ${eventName} skipped: ${configResult.reason}.`,
       );
       return;
     }
 
     this.logger.log(`Sending WhatsApp notification ${eventName}.`);
 
-    const client = twilio(
-      this.config.getOrThrow<string>('TWILIO_ACCOUNT_SID'),
-      this.config.getOrThrow<string>('TWILIO_AUTH_TOKEN'),
-    );
+    const { config } = configResult;
+    const client = twilio(config.accountSid, config.authToken);
 
     const message = await client.messages.create({
       body: lines.join('\n'),
-      from: this.config.getOrThrow<string>('WHATSAPP_FROM'),
-      to: this.config.getOrThrow<string>('WHATSAPP_TO'),
+      from: config.from,
+      to: config.to,
     });
 
     this.logger.log(
       `WhatsApp notification ${eventName} sent successfully. SID: ${message.sid}`,
     );
+  }
+
+  private getWhatsAppConfig(): WhatsAppConfigResult {
+    const accountSid = this.getTrimmedConfig('TWILIO_ACCOUNT_SID');
+    const authToken = this.getTrimmedConfig('TWILIO_AUTH_TOKEN');
+    const from = this.getTrimmedConfig('WHATSAPP_FROM');
+    const to = this.getTrimmedConfig('WHATSAPP_TO');
+
+    if (!accountSid || !authToken || !from || !to) {
+      return {
+        reason: 'Twilio/WhatsApp variables are not fully configured',
+      };
+    }
+
+    if (!TWILIO_ACCOUNT_SID_PATTERN.test(accountSid)) {
+      return {
+        reason:
+          'TWILIO_ACCOUNT_SID must be a valid Twilio Account SID starting with AC',
+      };
+    }
+
+    if (
+      !WHATSAPP_ADDRESS_PATTERN.test(from) ||
+      !WHATSAPP_ADDRESS_PATTERN.test(to)
+    ) {
+      return {
+        reason:
+          'WHATSAPP_FROM and WHATSAPP_TO must use whatsapp:+number format',
+      };
+    }
+
+    return {
+      config: {
+        accountSid,
+        authToken,
+        from,
+        to,
+      },
+    };
+  }
+
+  private getTrimmedConfig(key: string) {
+    return this.config.get<string>(key)?.trim() ?? '';
   }
 
   private buildServiceOrderLines(payload: ServiceOrderNotification) {

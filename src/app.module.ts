@@ -9,6 +9,7 @@ import { LocationsModule } from './locations/locations.module';
 import { CustomersModule } from './customers/customers.module';
 import { AccessListModule } from './access-list/access-list.module';
 import { WhatsAppModule } from './whatsapp/whatsapp.module';
+import { ActivityLogsModule } from './activity-logs/activity-logs.module';
 
 @Module({
   controllers: [HealthController],
@@ -22,6 +23,7 @@ import { WhatsAppModule } from './whatsapp/whatsapp.module';
     CustomersModule,
     AccessListModule,
     WhatsAppModule,
+    ActivityLogsModule,
   ],
 })
 export class AppModule {}

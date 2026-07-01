@@ -29,11 +29,15 @@ describe('ServiceOrdersService', () => {
       sendServiceOrderFinished: jest.fn(),
       sendServiceOrderStarted: jest.fn(),
     };
+    const activityLogs = {
+      record: jest.fn(),
+    };
 
     const service = new ServiceOrdersService(
       prisma as never,
       locationsService as never,
       whatsAppService as never,
+      activityLogs as never,
     );
 
     return { prisma, service, whatsAppService };

@@ -11,6 +11,7 @@ import {
   UserRole,
 } from '../generated/prisma';
 import { PrismaService } from '../prisma/prisma.service';
+import { ActivityLogsService } from '../activity-logs/activity-logs.service';
 
 type ResponsibleSnapshot = {
   clerkUserId: string | null;
@@ -39,8 +40,10 @@ type StoredLocation = {
 };
 
 type Coordinates = {
+  displayName?: string | null;
   lat: number;
   lng: number;
+  query?: string;
 };
 
 const MAX_START_DISTANCE_METERS = 1000;
@@ -53,7 +56,10 @@ export class LocationsService {
   private readonly forwardGeocodeCache = new Map<string, Coordinates>();
   private readonly reverseGeocodeCache = new Map<string, string>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly activityLogs: ActivityLogsService,
+  ) {}
 
   async updateLocation(
     user: CurrentUserPayload,
@@ -107,6 +113,19 @@ export class LocationsService {
       });
     }
 
+    void this.activityLogs.record({
+      message: 'Localizacao recebida pelo backend.',
+      metadata: {
+        accuracy: null,
+        address: responsibleAddress,
+        lat: Number(lat.toFixed(6)),
+        lng: Number(lng.toFixed(6)),
+        serviceOrder: activeServiceOrder,
+      },
+      type: 'location.received',
+      userId: user.id,
+    });
+
     return { success: true };
   }
 
@@ -132,6 +151,15 @@ export class LocationsService {
         locationStatus: status,
         locationStatusChangedAt: changedAt,
       },
+    });
+
+    void this.activityLogs.record({
+      message: `Status de localizacao atualizado para ${status}.`,
+      metadata: {
+        status,
+      },
+      type: 'location.status_updated',
+      userId: user.id,
     });
 
     return {
@@ -211,10 +239,10 @@ export class LocationsService {
         Boolean(liveLocation) && liveTimestamp >= persistedTimestamp;
       const lastLocationAt = shouldUseLiveLocation
         ? liveLocation?.timestamp
-        : user.lastLocationAt?.toISOString() ?? null;
+        : (user.lastLocationAt?.toISOString() ?? null);
       const locationStatusChangedAt = shouldUseLiveLocation
         ? liveLocation?.locationStatusChangedAt
-        : user.locationStatusChangedAt?.toISOString() ?? null;
+        : (user.locationStatusChangedAt?.toISOString() ?? null);
       const latestTimestamp = lastLocationAt
         ? new Date(lastLocationAt).getTime()
         : 0;
@@ -239,14 +267,14 @@ export class LocationsService {
             : null,
         isOnline: status === LocationSignalStatus.ACTIVE,
         lastLocationAddress: shouldUseLiveLocation
-          ? liveLocation?.responsibleAddress ?? null
+          ? (liveLocation?.responsibleAddress ?? null)
           : user.lastLocationAddress,
         lastLocationAt,
         lastLocationLat: shouldUseLiveLocation
-          ? liveLocation?.lat ?? null
+          ? (liveLocation?.lat ?? null)
           : user.lastLocationLat,
         lastLocationLng: shouldUseLiveLocation
-          ? liveLocation?.lng ?? null
+          ? (liveLocation?.lng ?? null)
           : user.lastLocationLng,
         locationStatusChangedAt,
         serviceOrder:
@@ -450,61 +478,165 @@ export class LocationsService {
   }
 
   private async forwardGeocode(address: string) {
-    const normalizedAddress = address.trim().toLowerCase();
+    const normalizedAddress = this.normalizeGeocodeQuery(address);
     const cached = this.forwardGeocodeCache.get(normalizedAddress);
 
     if (cached) {
       return cached;
     }
 
+    const queries = this.buildForwardGeocodeQueries(address);
+
+    for (const query of queries) {
+      try {
+        const coordinates = await this.searchForwardGeocode(query);
+
+        if (coordinates) {
+          this.forwardGeocodeCache.set(normalizedAddress, coordinates);
+          this.forwardGeocodeCache.set(
+            this.normalizeGeocodeQuery(query),
+            coordinates,
+          );
+          this.logger.log(
+            `Forward geocoding matched "${address}" using "${query}" -> ${coordinates.displayName ?? 'coordinates only'}`,
+          );
+          return coordinates;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Forward geocoding request failed for "${query}" from "${address}": ${String(
+            error,
+          )}`,
+        );
+      }
+    }
+
+    this.logger.warn(
+      `Forward geocoding found no result for "${address}". Attempts: ${queries.join(
+        ' | ',
+      )}`,
+    );
+    throw new BadRequestException(
+      'Nao foi possivel localizar o endereco do cliente no mapa para validar a proximidade.',
+    );
+  }
+
+  private async searchForwardGeocode(
+    query: string,
+  ): Promise<Coordinates | null> {
     const url = new URL('https://nominatim.openstreetmap.org/search');
     url.searchParams.set('format', 'jsonv2');
     url.searchParams.set('limit', '1');
     url.searchParams.set('countrycodes', 'br');
-    url.searchParams.set('q', `${address}, Brasil`);
+    url.searchParams.set('q', this.ensureBrazilSuffix(query));
 
-    let response: Awaited<ReturnType<typeof fetch>>;
-
-    try {
-      response = await fetch(url, {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': 'fulltech-control/1.0',
-        },
-      });
-    } catch (error) {
-      this.logger.warn(
-        `Forward geocoding request failed for "${address}": ${String(error)}`,
-      );
-      throw new BadRequestException(
-        'Nao foi possivel localizar o endereco do cliente no mapa para validar a proximidade.',
-      );
-    }
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'fulltech-control/1.0',
+      },
+    });
 
     if (!response.ok) {
-      throw new BadRequestException(
-        'Nao foi possivel localizar o endereco do cliente no mapa para validar a proximidade.',
-      );
+      return null;
     }
 
     const payload = (await response.json()) as Array<{
+      display_name?: string;
       lat?: string;
       lon?: string;
     }>;
-
     const firstMatch = payload[0];
     const lat = Number(firstMatch?.lat);
     const lng = Number(firstMatch?.lon);
 
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      throw new BadRequestException(
-        'Nao foi possivel localizar o endereco do cliente no mapa para validar a proximidade.',
-      );
+      return null;
     }
 
-    const coordinates = { lat, lng };
-    this.forwardGeocodeCache.set(normalizedAddress, coordinates);
-    return coordinates;
+    return {
+      displayName: firstMatch?.display_name ?? null,
+      lat,
+      lng,
+      query,
+    };
+  }
+
+  private buildForwardGeocodeQueries(address: string) {
+    const original = address.trim();
+    const expanded = this.expandStreetAbbreviations(original);
+    const withoutPostalCode = expanded.replace(/\b\d{5}-?\d{3}\b/g, ' ');
+    const noDash = withoutPostalCode.replace(/\s+-\s+/g, ', ');
+    const parts = expanded.split(/\s+-\s+/).map((part) => part.trim());
+    const streetPart = parts[0] ?? expanded;
+    const cityState = this.extractCityStateFromAddress(expanded);
+
+    return Array.from(
+      new Set(
+        [
+          original,
+          expanded,
+          noDash,
+          cityState ? `${streetPart} ${cityState}` : '',
+          cityState
+            ? `${this.expandStreetAbbreviations(streetPart)} ${cityState}`
+            : '',
+          this.removeAddressDistrict(withoutPostalCode),
+          this.stripAccents(noDash),
+          this.stripAccents(
+            cityState
+              ? `${this.expandStreetAbbreviations(streetPart)} ${cityState}`
+              : '',
+          ),
+        ]
+          .map((query) => this.normalizeGeocodeQuery(query))
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  private expandStreetAbbreviations(address: string) {
+    return address
+      .replace(/\bR\.\s*/gi, 'Rua ')
+      .replace(/\bAv\.\s*/gi, 'Avenida ')
+      .replace(/\bAl\.\s*/gi, 'Alameda ')
+      .replace(/\bPç\.\s*/gi, 'Praca ');
+  }
+
+  private extractCityStateFromAddress(address: string) {
+    const withoutPostalCode = address.replace(/\b\d{5}-?\d{3}\b/g, ' ');
+    const stateMatch = withoutPostalCode.match(/\b([A-Z]{2})\b/i);
+    const state = stateMatch?.[1]?.toUpperCase() ?? '';
+    const cityMatch = withoutPostalCode.match(/,\s*([^,-]+)\s+-\s*[A-Z]{2}\b/i);
+    const city = cityMatch?.[1]?.trim() ?? '';
+
+    return [city, state].filter(Boolean).join(' ');
+  }
+
+  private removeAddressDistrict(address: string) {
+    const parts = address.split(/\s+-\s+/).map((part) => part.trim());
+
+    if (parts.length <= 2) {
+      return address;
+    }
+
+    return [parts[0], parts.slice(2).join(' ')].filter(Boolean).join(' ');
+  }
+
+  private ensureBrazilSuffix(query: string) {
+    return /\bbrasil\b/i.test(query) ? query : `${query}, Brasil`;
+  }
+
+  private normalizeGeocodeQuery(value: string) {
+    return value
+      .replace(/\s+/g, ' ')
+      .replace(/\s+,/g, ',')
+      .replace(/,\s*,/g, ',')
+      .trim();
+  }
+
+  private stripAccents(value: string) {
+    return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   }
 
   private async resolveResponsibleAddress(lat: number, lng: number) {
