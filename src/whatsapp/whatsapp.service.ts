@@ -25,8 +25,8 @@ type StartedServiceOrderNotification = {
   address: string | null;
   customer: string;
   identifier: string | null;
-  latitude: number;
-  longitude: number;
+  latitude?: number;
+  longitude?: number;
   serviceOrderId: string;
   technicianName: string | null;
 };
@@ -98,13 +98,19 @@ export class WhatsAppService {
   async sendServiceOrderStarted(
     payload: StartedServiceOrderNotification,
   ): Promise<void> {
+    const mapLine =
+      typeof payload.latitude === 'number' &&
+      typeof payload.longitude === 'number'
+        ? `Mapa: https://www.google.com/maps?q=${payload.latitude},${payload.longitude}`
+        : 'Mapa: localizacao nao capturada no inicio da OS';
+
     await this.sendMessage('SERVICE_ORDER_STARTED', [
       'Atendimento iniciado no Fulltech Control.',
       `OS: ${payload.identifier || payload.serviceOrderId}`,
       `Cliente: ${payload.customer}`,
       `Tecnico: ${payload.technicianName || 'Nao informado'}`,
       `Endereco: ${payload.address || 'Nao informado'}`,
-      `Mapa: https://www.google.com/maps?q=${payload.latitude},${payload.longitude}`,
+      mapLine,
     ]);
   }
 

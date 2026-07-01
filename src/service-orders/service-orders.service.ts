@@ -240,11 +240,20 @@ export class ServiceOrdersService {
       );
     }
 
+    const startLat = dto.lat;
+    const startLng = dto.lng;
+    const hasStartCoordinates =
+      typeof startLat === 'number' &&
+      Number.isFinite(startLat) &&
+      typeof startLng === 'number' &&
+      Number.isFinite(startLng);
+
     void this.activityLogs.record({
       message: `Tentativa de iniciar OS ${existing.identifier ?? existing.id}.`,
       metadata: {
         address: existing.address,
         customer: existing.customer,
+        locationProvided: hasStartCoordinates,
         serviceOrderId: existing.id,
         serviceOrderIdentifier: existing.identifier,
       },
@@ -252,65 +261,37 @@ export class ServiceOrdersService {
       userId: actor.id,
     });
 
-    let rangeValidation: Awaited<
-      ReturnType<LocationsService['ensureWithinCustomerRange']>
-    >;
-
-    try {
-      rangeValidation = await this.locationsService.ensureWithinCustomerRange(
-        existing.address ?? null,
-        dto.lat,
-        dto.lng,
-      );
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Nao foi possivel iniciar a OS.';
-
-      void this.activityLogs.record({
-        message: `Falha ao iniciar OS ${existing.identifier ?? existing.id}: ${message}`,
-        metadata: {
-          address: existing.address,
-          customer: existing.customer,
-          serviceOrderId: existing.id,
-          serviceOrderIdentifier: existing.identifier,
-          technicianLat: Number(dto.lat.toFixed(6)),
-          technicianLng: Number(dto.lng.toFixed(6)),
-        },
-        type: 'service_order.start_failed',
-        userId: actor.id,
-      });
-      throw error;
-    }
-
     const updatedOrder = await this.prisma.serviceOrder.update({
       where: { id: existing.id },
       data: {
         assignedToEmail: actor.email ?? null,
         assignedToId: actor.id,
         assignedToName: actor.name ?? null,
-        locationCapturedAt: new Date(),
-        locationLat: dto.lat,
-        locationLng: dto.lng,
+        ...(hasStartCoordinates
+          ? {
+              locationCapturedAt: new Date(),
+              locationLat: startLat,
+              locationLng: startLng,
+            }
+          : {}),
         status: ServiceOrderStatus.IN_PROGRESS,
       },
     });
 
-    await this.locationsService.updateLocation(actor, dto.lat, dto.lng, {
-      address: updatedOrder.address ?? null,
-      customer: updatedOrder.customer,
-      id: updatedOrder.id,
-      identifier: updatedOrder.identifier ?? null,
-    });
+    if (hasStartCoordinates) {
+      await this.locationsService.updateLocation(actor, startLat, startLng, {
+        address: updatedOrder.address ?? null,
+        customer: updatedOrder.customer,
+        id: updatedOrder.id,
+        identifier: updatedOrder.identifier ?? null,
+      });
+    }
 
     void this.activityLogs.record({
       message: `OS ${updatedOrder.identifier ?? updatedOrder.id} iniciada com sucesso.`,
       metadata: {
         customer: updatedOrder.customer,
-        distanceMeters: Math.round(rangeValidation.distance),
-        geocodeDisplayName: rangeValidation.customerCoordinates.displayName,
-        geocodeQuery: rangeValidation.customerCoordinates.query,
+        locationCapturedAtStart: hasStartCoordinates,
         serviceOrderId: updatedOrder.id,
         serviceOrderIdentifier: updatedOrder.identifier,
       },
@@ -323,8 +304,8 @@ export class ServiceOrdersService {
         address: updatedOrder.address,
         customer: updatedOrder.customer,
         identifier: updatedOrder.identifier,
-        latitude: dto.lat,
-        longitude: dto.lng,
+        latitude: hasStartCoordinates ? startLat : undefined,
+        longitude: hasStartCoordinates ? startLng : undefined,
         serviceOrderId: updatedOrder.id,
         technicianName: actor.name ?? actor.email ?? null,
       });

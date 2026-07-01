@@ -40,7 +40,7 @@ describe('ServiceOrdersService', () => {
       activityLogs as never,
     );
 
-    return { prisma, service, whatsAppService };
+    return { locationsService, prisma, service, whatsAppService };
   };
 
   it('blocks technicians from creating service orders', async () => {
@@ -310,6 +310,96 @@ describe('ServiceOrdersService', () => {
       ]
     >;
     expect(createCalls[0][0].data.identifier).toBe('0013');
+  });
+
+  it('starts service orders without requiring location coordinates', async () => {
+    const { locationsService, prisma, service, whatsAppService } =
+      createService();
+
+    prisma.serviceOrder.findUnique.mockResolvedValue({
+      address: 'Rua Alessio de Paolis, 223',
+      assignedToId: null,
+      customer: 'CASA',
+      id: 'os-31',
+      identifier: '0031',
+      status: ServiceOrderStatus.OPEN,
+    });
+    prisma.serviceOrder.update.mockResolvedValue({
+      address: 'Rua Alessio de Paolis, 223',
+      assignedToEmail: 'tech@example.com',
+      assignedToId: 'local-tech',
+      assignedToName: 'Tecnico Teste',
+      collaborator: null,
+      completionDescription: null,
+      completionPhotos: [],
+      createdAt: new Date('2026-07-01T15:00:00.000Z'),
+      createdByEmail: 'admin@example.com',
+      createdById: 'local-admin',
+      createdByName: 'Admin Teste',
+      customer: 'CASA',
+      customerEmail: null,
+      customerPhones: [],
+      customerSignature: null,
+      deadline: null,
+      defectAdjusted: null,
+      defectSolution: null,
+      description: 'Teste',
+      durationMinutes: null,
+      equipmentStatus: null,
+      id: 'os-31',
+      identifier: '0031',
+      locationCapturedAt: null,
+      locationLat: null,
+      locationLng: null,
+      osType: ServiceOrderType.manutencao,
+      scheduleAt: new Date('2026-07-01T15:20:00.000Z'),
+      scheduleTimeText: '12:20',
+      status: ServiceOrderStatus.IN_PROGRESS,
+      updatedAt: new Date('2026-07-01T15:01:00.000Z'),
+    });
+    prisma.user.findMany.mockResolvedValue([]);
+
+    await service.start(
+      'os-31',
+      {},
+      {
+        clerkUserId: 'clerk-tech',
+        email: 'tech@example.com',
+        id: 'local-tech',
+        isActive: true,
+        name: 'Tecnico Teste',
+        role: UserRole.TECH,
+      },
+    );
+
+    const updateCalls = prisma.serviceOrder.update.mock.calls as Array<
+      [
+        {
+          data: {
+            assignedToId?: string;
+            locationCapturedAt?: Date;
+            locationLat?: number;
+            locationLng?: number;
+            status?: ServiceOrderStatus;
+          };
+        },
+      ]
+    >;
+    const updateData = updateCalls[0][0].data;
+    expect(updateData.status).toBe(ServiceOrderStatus.IN_PROGRESS);
+    expect(updateData.assignedToId).toBe('local-tech');
+    expect(updateData).not.toHaveProperty('locationLat');
+    expect(updateData).not.toHaveProperty('locationLng');
+    expect(updateData).not.toHaveProperty('locationCapturedAt');
+    expect(locationsService.updateLocation).not.toHaveBeenCalled();
+
+    expect(whatsAppService.sendServiceOrderStarted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        latitude: undefined,
+        longitude: undefined,
+        serviceOrderId: 'os-31',
+      }),
+    );
   });
 
   it('sends WhatsApp notification when a technician finishes a service order', async () => {
